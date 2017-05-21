@@ -2039,32 +2039,18 @@ class Avb(object):
     data_size += h.auxiliary_data_block_size
     return image.read(data_size)
 
-  def _get_cmdline_descriptors_for_dm_verity(self, image):
+  def _get_cmdline_descriptors_for_hashtree_descriptor(self, ht):
     """Generate kernel cmdline descriptors for dm-verity.
 
     Arguments:
-      image: An ImageHandler (vbmeta or footer) with a hashtree descriptor.
+      ht: A AvbHashtreeDescriptor
 
     Returns:
       A list with two AvbKernelCmdlineDescriptor with dm-verity kernel cmdline
       instructions. There is one for when hashtree is not disabled and one for
       when it is.
 
-    Raises:
-      AvbError: If  |image| doesn't have a hashtree descriptor.
-
     """
-
-    (_, _, descriptors, _) = self._parse_image(image)
-
-    ht = None
-    for desc in descriptors:
-      if isinstance(desc, AvbHashtreeDescriptor):
-        ht = desc
-        break
-
-    if not ht:
-      raise AvbError('No hashtree descriptor in given image')
 
     c = 'dm="1 vroot none ro 1,'
     c += '0'  # start
@@ -2111,6 +2097,35 @@ class Avb(object):
 
     return [desc, desc_no_ht]
 
+  def _get_cmdline_descriptors_for_dm_verity(self, image):
+    """Generate kernel cmdline descriptors for dm-verity.
+
+    Arguments:
+      image: An ImageHandler (vbmeta or footer) with a hashtree descriptor.
+
+    Returns:
+      A list with two AvbKernelCmdlineDescriptor with dm-verity kernel cmdline
+      instructions. There is one for when hashtree is not disabled and one for
+      when it is.
+
+    Raises:
+      AvbError: If  |image| doesn't have a hashtree descriptor.
+
+    """
+
+    (_, _, descriptors, _) = self._parse_image(image)
+
+    ht = None
+    for desc in descriptors:
+      if isinstance(desc, AvbHashtreeDescriptor):
+        ht = desc
+        break
+
+    if not ht:
+      raise AvbError('No hashtree descriptor in given image')
+
+    return self._get_cmdline_descriptors_for_hashtree_descriptor(ht)
+
   def make_vbmeta_image(self, output, chain_partitions, algorithm_name,
                         key_path, public_key_metadata_path, rollback_index,
                         flags, props, props_from_file, kernel_cmdlines,
@@ -2142,10 +2157,11 @@ class Avb(object):
     """
 
     descriptors = []
+    ht_desc_to_setup = None
     vbmeta_blob = self._generate_vbmeta_blob(
         algorithm_name, key_path, public_key_metadata_path, descriptors,
         chain_partitions, rollback_index, flags, props, props_from_file,
-        kernel_cmdlines, setup_rootfs_from_kernel,
+        kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
         include_descriptors_from_image, signing_helper, release_string,
         append_to_release_string)
 
@@ -2159,6 +2175,7 @@ class Avb(object):
                             rollback_index, flags, props, props_from_file,
                             kernel_cmdlines,
                             setup_rootfs_from_kernel,
+                            ht_desc_to_setup,
                             include_descriptors_from_image, signing_helper,
                             release_string, append_to_release_string):
     """Generates a VBMeta blob.
@@ -2184,6 +2201,8 @@ class Avb(object):
       kernel_cmdlines: Kernel cmdlines to insert (list of strings).
       setup_rootfs_from_kernel: None or file to generate
         dm-verity kernel cmdline from.
+      ht_desc_to_setup: If not None, an AvbHashtreeDescriptor to
+        generate dm-verity kernel cmdline descriptors from.
       include_descriptors_from_image: List of file objects for which
         to insert descriptors from.
       signing_helper: Program which signs a hash and return signature.
@@ -2258,11 +2277,18 @@ class Avb(object):
         desc.value = open(file_path, 'rb').read()
         encoded_descriptors.extend(desc.encode())
 
-    # Add AvbKernelCmdline descriptor for dm-verity, if requested.
+    # Add AvbKernelCmdline descriptor for dm-verity from an image, if requested.
     if setup_rootfs_from_kernel:
       image_handler = ImageHandler(
           setup_rootfs_from_kernel.name)
       cmdline_desc = self._get_cmdline_descriptors_for_dm_verity(image_handler)
+      encoded_descriptors.extend(cmdline_desc[0].encode())
+      encoded_descriptors.extend(cmdline_desc[1].encode())
+
+    # Add AvbKernelCmdline descriptor for dm-verity from desc, if requested.
+    if ht_desc_to_setup:
+      cmdline_desc = self._get_cmdline_descriptors_for_hashtree_descriptor(
+          ht_desc_to_setup)
       encoded_descriptors.extend(cmdline_desc[0].encode())
       encoded_descriptors.extend(cmdline_desc[1].encode())
 
@@ -2462,8 +2488,8 @@ class Avb(object):
                       public_key_metadata_path, rollback_index, flags, props,
                       props_from_file, kernel_cmdlines,
                       setup_rootfs_from_kernel,
-                      include_descriptors_from_image, signing_helper,
-                      release_string, append_to_release_string,
+                      include_descriptors_from_image, calc_max_image_size,
+                      signing_helper, release_string, append_to_release_string,
                       output_vbmeta_image, do_not_append_vbmeta_image):
     """Implementation of the add_hash_footer on unsparse images.
 
@@ -2486,6 +2512,9 @@ class Avb(object):
         dm-verity kernel cmdline from.
       include_descriptors_from_image: List of file objects for which
         to insert descriptors from.
+      calc_max_image_size: Don't store the footer - instead calculate the
+        maximum image size leaving enough room for metadata with the
+        given |partition_size|.
       signing_helper: Program which signs a hash and return signature.
       release_string: None or avbtool release string.
       append_to_release_string: None or string to append.
@@ -2495,6 +2524,17 @@ class Avb(object):
     Raises:
       AvbError: If an argument is incorrect.
     """
+    # First, calculate the maximum image size such that an image
+    # this size + metadata (footer + vbmeta struct) fits in
+    # |partition_size|.
+    max_metadata_size = self.MAX_VBMETA_SIZE + self.MAX_FOOTER_SIZE
+    max_image_size = partition_size - max_metadata_size
+
+    # If we're asked to only calculate the maximum image size, we're done.
+    if calc_max_image_size:
+      print '{}'.format(max_image_size)
+      return
+
     image = ImageHandler(image_filename)
 
     if partition_size % image.block_size != 0:
@@ -2517,12 +2557,6 @@ class Avb(object):
     # If anything goes wrong from here-on, restore the image back to
     # its original size.
     try:
-      # First, calculate the maximum image size such that an image
-      # this size + metadata (footer + vbmeta struct) fits in
-      # |partition_size|.
-      max_metadata_size = self.MAX_VBMETA_SIZE + self.MAX_FOOTER_SIZE
-      max_image_size = partition_size - max_metadata_size
-
       # If image size exceeds the maximum image size, fail.
       if image.image_size > max_image_size:
         raise AvbError('Image size of {} exceeds maximum image '
@@ -2558,10 +2592,11 @@ class Avb(object):
       h_desc.digest = digest
 
       # Generate the VBMeta footer.
+      ht_desc_to_setup = None
       vbmeta_blob = self._generate_vbmeta_blob(
           algorithm_name, key_path, public_key_metadata_path, [h_desc],
           chain_partitions, rollback_index, flags, props, props_from_file,
-          kernel_cmdlines, setup_rootfs_from_kernel,
+          kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
           include_descriptors_from_image, signing_helper, release_string,
           append_to_release_string)
 
@@ -2619,6 +2654,7 @@ class Avb(object):
                           public_key_metadata_path, rollback_index, flags,
                           props, props_from_file, kernel_cmdlines,
                           setup_rootfs_from_kernel,
+                          setup_as_rootfs_from_kernel,
                           include_descriptors_from_image,
                           calc_max_image_size, signing_helper,
                           release_string, append_to_release_string,
@@ -2648,6 +2684,8 @@ class Avb(object):
       kernel_cmdlines: Kernel cmdlines to insert (list of strings).
       setup_rootfs_from_kernel: None or file to generate
         dm-verity kernel cmdline from.
+      setup_as_rootfs_from_kernel: If True, generate dm-verity kernel
+        cmdline to set up rootfs.
       include_descriptors_from_image: List of file objects for which
         to insert descriptors from.
       calc_max_image_size: Don't store the hashtree or footer - instead
@@ -2785,12 +2823,16 @@ class Avb(object):
         ht_desc.fec_offset = fec_offset
         ht_desc.fec_size = len(fec_data)
 
+      ht_desc_to_setup = None
+      if setup_as_rootfs_from_kernel:
+        ht_desc_to_setup = ht_desc
+
       # Generate the VBMeta footer and add padding as needed.
       vbmeta_offset = tree_offset + len_hashtree_and_fec
       vbmeta_blob = self._generate_vbmeta_blob(
           algorithm_name, key_path, public_key_metadata_path, [ht_desc],
           chain_partitions, rollback_index, flags, props, props_from_file,
-          kernel_cmdlines, setup_rootfs_from_kernel,
+          kernel_cmdlines, setup_rootfs_from_kernel, ht_desc_to_setup,
           include_descriptors_from_image, signing_helper, release_string,
           append_to_release_string)
       padding_needed = (round_to_multiple(len(vbmeta_blob), image.block_size) -
@@ -3228,12 +3270,18 @@ class AvbTool(object):
                             required=True)
     sub_parser.add_argument('--partition_name',
                             help='Partition name',
-                            required=True)
+                            default=None)
     sub_parser.add_argument('--hash_algorithm',
                             help='Hash algorithm to use (default: sha256)',
                             default='sha256')
     sub_parser.add_argument('--salt',
                             help='Salt in hex (default: /dev/urandom)')
+    sub_parser.add_argument('--calc_max_image_size',
+                            help=('Don\'t store the footer - '
+                                  'instead calculate the maximum image size '
+                                  'leaving enough room for metadata with '
+                                  'the given partition size.'),
+                            action='store_true')
     sub_parser.add_argument('--output_vbmeta_image',
                             help='Also write vbmeta struct to file',
                             type=argparse.FileType('wb'))
@@ -3308,6 +3356,12 @@ class AvbTool(object):
                             help=('Do not append vbmeta struct or footer '
                                   'to the image'),
                             action='store_true')
+    # This is different from --setup_rootfs_from_kernel insofar that
+    # it doesn't take an IMAGE, the generated cmdline will be for the
+    # hashtree we're adding.
+    sub_parser.add_argument('--setup_as_rootfs_from_kernel',
+                            action='store_true',
+                            help='Adds kernel cmdline for setting up rootfs')
     self._add_common_args(sub_parser)
     sub_parser.set_defaults(func=self.add_hashtree_footer)
 
@@ -3475,7 +3529,8 @@ class AvbTool(object):
   def add_hash_footer(self, args):
     """Implements the 'add_hash_footer' sub-command."""
     args = self._fixup_common_args(args)
-    self.avb.add_hash_footer(args.image.name, args.partition_size,
+    self.avb.add_hash_footer(args.image.name if args.image else None,
+                             args.partition_size,
                              args.partition_name, args.hash_algorithm,
                              args.salt, args.chain_partition, args.algorithm,
                              args.key,
@@ -3484,7 +3539,7 @@ class AvbTool(object):
                              args.kernel_cmdline,
                              args.setup_rootfs_from_kernel,
                              args.include_descriptors_from_image,
-                             args.signing_helper,
+                             args.calc_max_image_size, args.signing_helper,
                              args.internal_release_string,
                              args.append_to_release_string,
                              args.output_vbmeta_image,
@@ -3510,6 +3565,7 @@ class AvbTool(object):
                                  args.prop_from_file,
                                  args.kernel_cmdline,
                                  args.setup_rootfs_from_kernel,
+                                 args.setup_as_rootfs_from_kernel,
                                  args.include_descriptors_from_image,
                                  args.calc_max_image_size, args.signing_helper,
                                  args.internal_release_string,
