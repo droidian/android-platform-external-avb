@@ -263,6 +263,35 @@ TEST_F(AvbToolTest, CheckDescriptors) {
   EXPECT_EQ('\n', s[20]);
 }
 
+TEST_F(AvbToolTest, Padding) {
+  GenerateVBMetaImage("vbmeta.img",
+                      "SHA256_RSA2048",
+                      0,
+                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "--internal_release_string \"\"");
+
+  GenerateVBMetaImage("vbmeta_padded.img",
+                      "SHA256_RSA2048",
+                      0,
+                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "--internal_release_string \"\" --padding_size 4096");
+
+  base::FilePath vbmeta_path = testdir_.Append("vbmeta.img");
+  base::FilePath vbmeta_padded_path = testdir_.Append("vbmeta_padded.img");
+  int64_t vbmeta_size, vbmeta_padded_size;
+  ASSERT_TRUE(base::GetFileSize(vbmeta_path, &vbmeta_size));
+  ASSERT_TRUE(base::GetFileSize(vbmeta_padded_path, &vbmeta_padded_size));
+
+  EXPECT_NE(vbmeta_size, vbmeta_padded_size);
+
+  // The padded size should be a multiple of 4096.
+  EXPECT_EQ(vbmeta_padded_size % 4096, 0);
+
+  // When rounded up the unpadded size should equal the padded size.
+  int64_t vbmeta_size_rounded_up = ((vbmeta_size + 4095) / 4096) * 4096;
+  EXPECT_EQ(vbmeta_size_rounded_up, vbmeta_padded_size);
+}
+
 TEST_F(AvbToolTest, CheckRollbackIndex) {
   uint64_t rollback_index = 42;
   GenerateVBMetaImage("vbmeta.img",
@@ -1575,6 +1604,27 @@ TEST_F(AvbToolTest, SigningHelperBasic) {
   EXPECT_EQ("DONE", value);
 }
 
+TEST_F(AvbToolTest, SigningHelperWithFilesBasic) {
+  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
+  base::FilePath signing_helper_test_path =
+      testdir_.Append("signing_helper_test");
+  EXPECT_COMMAND(
+      0,
+      "SIGNING_HELPER_TEST=\"%s\" ./avbtool make_vbmeta_image "
+      "--output %s "
+      "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
+      "--signing_helper_with_files "
+      "test/avbtool_signing_helper_with_files_test.py "
+      "--internal_release_string \"\"",
+      signing_helper_test_path.value().c_str(),
+      vbmeta_path.value().c_str());
+
+  // Now check the value in test file.
+  std::string value;
+  ASSERT_TRUE(base::ReadFileToString(signing_helper_test_path, &value));
+  EXPECT_EQ("DONE", value);
+}
+
 TEST_F(AvbToolTest, SigningHelperReturnError) {
   base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
   EXPECT_COMMAND(
@@ -1583,6 +1633,19 @@ TEST_F(AvbToolTest, SigningHelperReturnError) {
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper test/avbtool_signing_helper_test.py "
+      "--internal_release_string \"\"",
+      vbmeta_path.value().c_str());
+}
+
+TEST_F(AvbToolTest, SigningHelperWithFilesReturnError) {
+  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
+  EXPECT_COMMAND(
+      1,
+      "./avbtool make_vbmeta_image "
+      "--output %s "
+      "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
+      "--signing_helper_with_files "
+      "test/avbtool_signing_helper_with_files_test.py "
       "--internal_release_string \"\"",
       vbmeta_path.value().c_str());
 }
