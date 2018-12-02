@@ -48,7 +48,9 @@ class AvbSlotVerifyTest : public BaseAvbToolTest,
 
   void CmdlineWithHashtreeVerification(bool hashtree_verification_on);
   void CmdlineWithChainedHashtreeVerification(bool hashtree_verification_on);
-  void VerificationDisabled(bool use_avbctl, bool preload);
+  void VerificationDisabled(bool use_avbctl,
+                            bool preload,
+                            bool has_system_partition);
 };
 
 TEST_F(AvbSlotVerifyTest, Basic) {
@@ -2006,7 +2008,8 @@ TEST_F(AvbSlotVerifyTest, CmdlineWithChainedHashtreeVerificationOn) {
 }
 
 void AvbSlotVerifyTest::VerificationDisabled(bool use_avbctl,
-                                             bool preload_boot) {
+                                             bool preload_boot,
+                                             bool has_system_partition) {
   const size_t boot_part_size = 32 * 1024 * 1024;
   const size_t dtbo_part_size = 4 * 1024 * 1024;
   const size_t rootfs_size = 1028 * 1024;
@@ -2089,6 +2092,10 @@ void AvbSlotVerifyTest::VerificationDisabled(bool use_avbctl,
   ops_.set_expected_public_key(
       PublicKeyAVB(base::FilePath("test/data/testkey_rsa2048.pem")));
 
+  if (!has_system_partition) {
+    ops_.set_hidden_partitions({"system", "system_a", "system_b"});
+  }
+
   // Manually set the flag the same way 'avbctl disable-verification'
   // would do it.
   if (use_avbctl) {
@@ -2131,8 +2138,13 @@ void AvbSlotVerifyTest::VerificationDisabled(bool use_avbctl,
                             AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE,
                             &slot_data));
   EXPECT_NE(nullptr, slot_data);
-  EXPECT_EQ("root=PARTUUID=1234-fake-guid-for:system_a",
-            std::string(slot_data->cmdline));
+  if (has_system_partition) {
+    EXPECT_EQ("root=PARTUUID=1234-fake-guid-for:system_a",
+              std::string(slot_data->cmdline));
+  } else {
+    EXPECT_EQ(nullptr, slot_data->cmdline);
+  }
+
   // Also make sure that it actually loads the boot and dtbo partitions.
   EXPECT_EQ(size_t(2), slot_data->num_loaded_partitions);
   EXPECT_EQ("boot",
@@ -2156,19 +2168,39 @@ void AvbSlotVerifyTest::VerificationDisabled(bool use_avbctl,
 }
 
 TEST_F(AvbSlotVerifyTest, VerificationDisabledUnmodified) {
-  VerificationDisabled(false, false);  // use_avbctl
+  VerificationDisabled(false,  // use_avbctl
+                       false,  // preload_boot
+                       true);  // has_system_partition
 }
 
 TEST_F(AvbSlotVerifyTest, VerificationDisabledModified) {
-  VerificationDisabled(true, false);  // use_avbctl
+  VerificationDisabled(true,   // use_avbctl
+                       false,  // preload_boot
+                       true);  // has_system_partition
 }
 
 TEST_F(AvbSlotVerifyTest, VerificationDisabledUnmodifiedPreloadBoot) {
-  VerificationDisabled(false, true);  // use_avbctl
+  VerificationDisabled(false,  // use_avbctl
+                       true,   // preload_boot
+                       true);  // has_system_partition
 }
 
 TEST_F(AvbSlotVerifyTest, VerificationDisabledModifiedPreloadBoot) {
-  VerificationDisabled(true, true);  // use_avbctl
+  VerificationDisabled(true,   // use_avbctl
+                       true,   // preload_boot
+                       true);  // has_system_partition
+}
+
+TEST_F(AvbSlotVerifyTest, VerificationDisabledUnmodifiedNoSystemPartition) {
+  VerificationDisabled(false,   // use_avbctl
+                       false,   // preload_boot
+                       false);  // has_system_partition
+}
+
+TEST_F(AvbSlotVerifyTest, VerificationDisabledModifiedNoSystemPartition) {
+  VerificationDisabled(true,    // use_avbctl
+                       false,   // preload_boot
+                       false);  // has_system_partition
 }
 
 // In the event that there's no vbmeta partition, we treat the vbmeta
@@ -2827,9 +2859,9 @@ class AvbSlotVerifyTestWithPersistentDigest : public AvbSlotVerifyTest {
   const char* kPersistentValueName = "avb.persistent_digest.factory";
   // The digest for the hash descriptor which matches the factory contents.
   const uint8_t kDigest[AVB_SHA256_DIGEST_SIZE] = {
-      0x18, 0x4c, 0xb3, 0x62, 0x43, 0xad, 0xb8, 0xb8, 0x7d, 0x2d, 0x8c,
-      0x48, 0x02, 0xde, 0x32, 0x12, 0x5f, 0xe2, 0x94, 0xec, 0x46, 0x75,
-      0x3d, 0x73, 0x21, 0x44, 0xee, 0x65, 0xdf, 0x68, 0xa2, 0x3d};
+      0x2e, 0x7c, 0xab, 0x63, 0x14, 0xe9, 0x61, 0x4b, 0x6f, 0x2d, 0xa1,
+      0x26, 0x30, 0x66, 0x1c, 0x30, 0x38, 0xe5, 0x59, 0x20, 0x25, 0xf6,
+      0x53, 0x4b, 0xa5, 0x82, 0x3c, 0x3b, 0x34, 0x0a, 0x1c, 0xb6};
 };
 
 TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic) {
@@ -2845,7 +2877,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1280 "
       "androidboot.vbmeta.digest="
-      "604268b04d4a971d2d727c79a70b2ea7f6a0e42ccbdead1983acbf015061ce6b "
+      "f7a4ce48092379fe0e913ffda10d859cd5fc19fa721c9e81f05f8bfea14b9873 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -3050,7 +3082,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha1) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "0bf73ed205a043d410277444a49cc5643c1046f53b3b942cdc2c16fea06acd7b "
+      "eeaa2fb8deb48b9645f817bb6a6ce05ba3ef92d0d2d9c950c2383853cd4a3064 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -3077,7 +3109,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha256) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "7d64315450f035f4ff93560403c46de5a7e2a0ddfc84b95bd69f7ed5654aa687 "
+      "d3f35ef7a0812d8328be7850003b2c5607b673d0aede641656c9c04fa7992d40 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
@@ -3108,7 +3140,7 @@ TEST_F(AvbSlotVerifyTestWithPersistentDigest, Basic_Hashtree_Sha512) {
       "androidboot.vbmeta.hash_alg=sha256 "
       "androidboot.vbmeta.size=1408 "
       "androidboot.vbmeta.digest="
-      "097d002a75d1e89557b662b6db3f1ebffb8419a02e79792a97b2c4fd1c8bedc4 "
+      "d6ea8d50dce5ca6d38ea6e780bb5b5d7ee588b53a92020ad3d1c99018f3e5f52 "
       "androidboot.vbmeta.invalidate_on_error=yes "
       "androidboot.veritymode=enforcing",
       last_cmdline_);
