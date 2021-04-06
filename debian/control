@@ -1,0 +1,22 @@
+Source: android-platform-external-avb
+Section: devel
+Priority: optional
+Maintainer: Eugenio Paolantonio (g7) <eugenio@droidian.org>
+Build-Depends: debhelper (>=13~),
+               dh-python,
+               python-all-dev (>= 2.7),
+X-Python-Version: >= 2.7
+Standards-Version: 4.2.1
+Homepage: https://android.googlesource.com/platform/external/avb
+Vcs-Git: https://github.com/droidian/android-platform-external-avb.git
+Vcs-Browser: https://github.com/droidian/android-platform-external-avb.git
+
+Package: avbtool
+Architecture: all
+Section: utils
+Depends: ${shlibs:Depends},
+         ${python:Depends},
+         python2 (>= 2.7)
+Description: Command-line tool for working with Android Verified Boot images
+ avbtool is a command-line tool for working with Android Verified Boot images,
+ also known as "vbmeta.img".
