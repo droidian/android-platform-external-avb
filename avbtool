@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 # Copyright 2016, The Android Open Source Project
 #
@@ -408,10 +408,10 @@ def encode_rsa_key(key_path):
     raise AvbError('Only RSA keys with exponent 65537 are supported.')
   ret = bytearray()
   # Calculate n0inv = -1/n[0] (mod 2^32)
-  b = 2L**32
+  b = 2**32
   n0inv = b - modinv(key.modulus, b)
   # Calculate rr = r^2 (mod N), where r = 2^(# of key bits)
-  r = 2L**key.modulus.bit_length()
+  r = 2**key.modulus.bit_length()
   rrmodn = r * r % key.modulus
   ret.extend(struct.pack('!II', key.num_bits, n0inv))
   ret.extend(encode_long(key.num_bits, key.modulus))
@@ -549,7 +549,7 @@ def verify_vbmeta_signature(vbmeta_header, vbmeta_blob):
   # is OK since 'avbtool verify_image' is not expected to run on the
   # Android builders (see bug #36809096).
   import Crypto.PublicKey.RSA
-  key = Crypto.PublicKey.RSA.construct((modulus, long(exponent)))
+  key = Crypto.PublicKey.RSA.construct((modulus, int(exponent)))
   if not key.verify(decode_long(padding_and_digest),
                     (decode_long(sig_blob), None)):
     return False
@@ -702,7 +702,7 @@ class ImageHandler(object):
     # image.
     offset = 0
     output_offset = 0
-    for _ in xrange(1, self._num_total_chunks + 1):
+    for _ in range(1, self._num_total_chunks + 1):
       chunk_offset = self._image.tell()
 
       header_bin = self._image.read(struct.calcsize(ImageChunk.FORMAT))
@@ -1366,9 +1366,9 @@ class AvbHashtreeDescriptor(AvbDescriptor):
     # correct but this a) currently requires the 'fec' binary; and b)
     # takes a long time; and c) is not strictly needed for
     # verification purposes as we've already verified the root hash.
-    print ('{}: Successfully verified {} hashtree of {} for image of {} bytes'
+    print(('{}: Successfully verified {} hashtree of {} for image of {} bytes'
            .format(self.partition_name, self.hash_algorithm, image_filename,
-                   self.image_size))
+                   self.image_size)))
     return True
 
 
@@ -1501,9 +1501,9 @@ class AvbHashDescriptor(AvbDescriptor):
       sys.stderr.write('{} digest of {} does not match digest in descriptor\n'.
                        format(self.hash_algorithm, image_filename))
       return False
-    print ('{}: Successfully verified {} hash of {} for image of {} bytes'
+    print(('{}: Successfully verified {} hash of {} for image of {} bytes'
            .format(self.partition_name, self.hash_algorithm, image_filename,
-                   self.image_size))
+                   self.image_size)))
     return True
 
 
@@ -1718,8 +1718,8 @@ class AvbChainPartitionDescriptor(AvbDescriptor):
                        format(self.partition_name))
       return False
 
-    print ('{}: Successfully verified chain partition descriptor matches '
-           'expected data'.format(self.partition_name))
+    print(('{}: Successfully verified chain partition descriptor matches '
+           'expected data'.format(self.partition_name)))
 
     return True
 
@@ -2163,10 +2163,10 @@ class Avb(object):
 
     key_blob = None
     if key_path:
-      print 'Verifying image {} using key at {}'.format(image_filename, key_path)
+      print(('Verifying image {} using key at {}'.format(image_filename, key_path)))
       key_blob = encode_rsa_key(key_path)
     else:
-      print 'Verifying image {} using embedded public key'.format(image_filename)
+      print(('Verifying image {} using embedded public key'.format(image_filename)))
 
     image = ImageHandler(image_filename)
     (footer, header, descriptors, image_size) = self._parse_image(image)
@@ -2193,11 +2193,11 @@ class Avb(object):
         raise AvbError('Embedded public key does not match given key.')
 
     if footer:
-      print ('vbmeta: Successfully verified footer and {} vbmeta struct in {}'
-             .format(alg_name, image_filename))
+      print(('vbmeta: Successfully verified footer and {} vbmeta struct in {}'
+             .format(alg_name, image_filename)))
     else:
-      print ('vbmeta: Successfully verified {} vbmeta struct in {}'
-             .format(alg_name, image_filename))
+      print(('vbmeta: Successfully verified {} vbmeta struct in {}'
+             .format(alg_name, image_filename)))
 
     for desc in descriptors:
       if not desc.verify(image_dir, image_ext, expected_chain_partitions_map):
@@ -2410,10 +2410,10 @@ class Avb(object):
           (_, image_header, _, _) = self._parse_image(ImageHandler(image.name))
           tmp_header.bump_required_libavb_version_minor(
               image_header.required_libavb_version_minor)
-        print '1.{}'.format(tmp_header.required_libavb_version_minor)
+        print(('1.{}'.format(tmp_header.required_libavb_version_minor)))
       else:
         # Descriptors aside, all vbmeta features are supported in 1.0.
-        print '1.0'
+        print('1.0')
       return
 
     if not output:
@@ -2605,11 +2605,11 @@ class Avb(object):
             algorithm_name))
 
     # Override release string, if requested.
-    if isinstance(release_string, (str, unicode)):
+    if isinstance(release_string, str):
       h.release_string = release_string
 
     # Append to release string, if requested. Also insert a space before.
-    if isinstance(append_to_release_string, (str, unicode)):
+    if isinstance(append_to_release_string, str):
       h.release_string += ' ' + append_to_release_string
 
     # For the Auxiliary data block, descriptors are stored at offset 0,
@@ -2822,7 +2822,7 @@ class Avb(object):
 
     # If we're asked to calculate minimum required libavb version, we're done.
     if print_required_libavb_version:
-      print '1.{}'.format(required_libavb_version_minor)
+      print(('1.{}'.format(required_libavb_version_minor)))
       return
 
     # First, calculate the maximum image size such that an image
@@ -2837,7 +2837,7 @@ class Avb(object):
 
     # If we're asked to only calculate the maximum image size, we're done.
     if calc_max_image_size:
-      print '{}'.format(max_image_size)
+      print(('{}'.format(max_image_size)))
       return
 
     image = ImageHandler(image_filename)
@@ -3030,7 +3030,7 @@ class Avb(object):
 
     # If we're asked to calculate minimum required libavb version, we're done.
     if print_required_libavb_version:
-      print '1.{}'.format(required_libavb_version_minor)
+      print(('1.{}'.format(required_libavb_version_minor)))
       return
 
     digest_size = len(hashlib.new(name=hash_algorithm).digest())
@@ -3052,7 +3052,7 @@ class Avb(object):
 
     # If we're asked to only calculate the maximum image size, we're done.
     if calc_max_image_size:
-      print '{}'.format(max_image_size)
+      print(('{}'.format(max_image_size)))
       return
 
     image = ImageHandler(image_filename)
@@ -3886,13 +3886,16 @@ class AvbTool(object):
     args = parser.parse_args(argv[1:])
     try:
       args.func(args)
+    except AttributeError:
+      sys.stderr.write('{}: {}\n'.format(argv[0], "AttributeError"))
+      sys.exit(1)
     except AvbError as e:
       sys.stderr.write('{}: {}\n'.format(argv[0], e.message))
       sys.exit(1)
 
   def version(self, _):
     """Implements the 'version' sub-command."""
-    print get_release_string()
+    print((get_release_string()))
 
   def extract_public_key(self, args):
     """Implements the 'extract_public_key' sub-command."""
