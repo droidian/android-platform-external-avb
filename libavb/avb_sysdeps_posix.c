@@ -22,7 +22,6 @@
  * SOFTWARE.
  */
 
-#include <endian.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,12 +45,40 @@ int avb_strcmp(const char* s1, const char* s2) {
   return strcmp(s1, s2);
 }
 
+int avb_strncmp(const char* s1, const char* s2, size_t n) {
+  return strncmp(s1, s2, n);
+}
+
 size_t avb_strlen(const char* str) {
   return strlen(str);
 }
 
 void avb_abort(void) {
   abort();
+}
+
+static FILE* get_log_stream() {
+#ifdef USE_KMSG_AS_LOG_TARGET
+  static FILE* fp = NULL;
+
+  if (fp == NULL) {
+    fp = fopen("/dev/kmsg", "ae");
+    if (fp == NULL || setvbuf(fp, NULL, _IONBF, 0) != 0) {
+      fp = stderr;
+    }
+  }
+
+  return fp;
+#else
+  return stderr;
+#endif
+}
+
+void avb_printf(const char* fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  vfprintf(get_log_stream(), fmt, ap);
+  va_end(ap);
 }
 
 void avb_print(const char* message) {

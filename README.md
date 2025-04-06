@@ -6,30 +6,32 @@ Verified Boot 2.0. Usually AVB is used to refer to this codebase.
 
 # Table of Contents
 
-* [What is it?](#What-is-it)
-    + [The VBMeta struct](#The-VBMeta-struct)
-    + [Rollback Protection](#Rollback-Protection)
-    + [A/B Support](#A_B-Support)
-* [Tools and Libraries](#Tools-and-Libraries)
+* [What is it?](#what-is-it)
+    + [The VBMeta struct](#the-vbmeta-struct)
+    + [Rollback Protection](#rollback-Protection)
+    + [A/B Support](#a_b-Support)
+    + [The VBMeta Digest](#the-vbmeta-digest)
+* [Tools and Libraries](#tools-and-libraries)
     + [avbtool and libavb](#avbtool-and-libavb)
-    + [Files and Directories](#Files-and-Directories)
-    + [Portability](#Portability)
-    + [Versioning and Compatibility](#Versioning-and-Compatibility)
-    + [Adding New Features](#Adding-New-Features)
-    + [Using avbtool](#Using-avbtool)
-    + [Build System Integration](#Build-System-Integration)
-* [Device Integration](#Device-Integration)
-    + [System Dependencies](#System-Dependencies)
-    + [Locked and Unlocked mode](#Locked-and-Unlocked-mode)
-    + [Tamper-evident Storage](#Tamper_evident-Storage)
-    + [Named Persistent Values](#Named-Persistent-Values)
-    + [Persistent Digests](#Persistent-Digests)
-    + [Updating Stored Rollback Indexes](#Updating-Stored-Rollback-Indexes)
-    + [Recommended Bootflow](#Recommended-Bootflow)
-    + [Handling dm-verity Errors](#Handling-dm_verity-Errors)
-    + [Android Specific Integration](#Android-Specific-Integration)
-    + [Device Specific Notes](#Device-Specific-Notes)
-* [Version History](#Version-History)
+    + [Files and Directories](#files-and-directories)
+    + [Portability](#portability)
+    + [Versioning and Compatibility](#versioning-and-compatibility)
+    + [Adding New Features](#adding-new-features)
+    + [Using avbtool](#using-avbtool)
+    + [Build System Integration](#build-system-integration)
+* [Device Integration](#device-integration)
+    + [System Dependencies](#system-dependencies)
+    + [Locked and Unlocked mode](#locked-and-unlocked-mode)
+    + [Tamper-evident Storage](#tamper_evident-storage)
+    + [Named Persistent Values](#named-persistent-values)
+    + [Persistent Digests](#persistent-digests)
+    + [Updating Stored Rollback Indexes](#updating-stored-rollback-indexes)
+    + [Recommended Bootflow](#recommended-bootflow)
+      + [Booting Into Recovery](#booting-into-recovery)
+    + [Handling dm-verity Errors](#handling-dm_verity-errors)
+    + [Android Specific Integration](#android-specific-integration)
+    + [Device Specific Notes](#device-specific-notes)
+* [Version History](#version-history)
 
 # What is it?
 
@@ -82,11 +84,23 @@ chain partition descriptor). Crucially, because there's a footer with
 the offset, the `xyz` partition can be updated without the `vbmeta`
 partition needing any changes.
 
-The VBMeta struct is flexible enough to allow hash descriptors and
-hashtree descriptors for any partition to live in either the `vbmeta`
-partition or - via a chain partition descriptor - in the partition
-that they are used to integrity check. This allows for a wide range of
-organizational and trust relationships.
+The VBMeta struct is flexible enough to allow hash descriptors and hashtree
+descriptors for any partition to live in the `vbmeta` partition, the partition
+that they are used to integrity check (via a chain partition descriptor), or any
+other partition (via a chain partition descriptor). This allows for a wide range
+of organizational and trust relationships.
+
+Chained partitions need not use a footer - it is permissible to have a chained
+partition point to a partition where the VBMeta struct is at the beginning
+(e.g. just like the `vbmeta` partition). This is useful for use-cases where all
+hash- and hashtree-descriptors for the partitions owned by an entire
+organization are stored in a dedicated partition, for example `vbmeta_google`.
+In this example the hashtree descriptor for `system` is in the `vbmeta_google`
+partition meaning that the bootloader doesn't need to access the `system`
+partition at all which is helpful if the `system` partition is managed as a
+logical partition (via e.g. [LVM
+techniques](https://en.wikipedia.org/wiki/Logical_volume_management) or
+similar).
 
 ## Rollback Protection
 
@@ -110,7 +124,7 @@ Rollback protection is having the device reject an image unless
 having the device increase `stored_rollback_index[n]` over
 time. Exactly how this is done is discussed in
 the
-[Updating Stored Rollback Indexes](#Updating-Stored-Rollback-Indexes)
+[Updating Stored Rollback Indexes](#updating-stored-rollback-indexes)
 section.
 
 ## A/B Support
@@ -129,6 +143,50 @@ In version 1.1 or later, avbtool supports `--do_not_use_ab` for
 possible to work with a partition that does not use A/B and should
 never have the prefix. This corresponds to the
 `AVB_HASH[TREE]_DESCRIPTOR_FLAGS_DO_NOT_USE_AB` flags.
+
+In version 1.3, avbtool supports `chain_partition_do_not_use_ab` for
+`make_vbmeta_image` operations. This makes it possible to work with
+a chain partition that does not use A/B and should not have the suffix.
+This corresponds to the `AVB_CHAIN_PARTITION_DESCRIPTOR_FLAGS_DO_NOT_USE_AB` flag.
+
+## The VBMeta Digest
+
+The VBMeta digest is a digest over all VBMeta structs including the root struct
+(e.g. in the `vbmeta` partition) and all VBMeta structs in chained
+partitions. This digest can be calculated at build time using `avbtool
+calculate_vbmeta_digest` and also at runtime using the
+`avb_slot_verify_data_calculate_vbmeta_digest()` function. It is also set on the
+kernel command-line as `androidboot.vbmeta.digest`, see the `avb_slot_verify()`
+documentation for exact details.
+
+This digest can be used together with `libavb` in userspace inside the loaded
+operating system to verify authenticity of the loaded vbmeta structs. This is
+useful if the root-of-trust and/or stored rollback indexes are only available
+while running in the boot loader.
+
+Additionally, if the VBMeta digest is included in [hardware-backed attestation
+data](https://developer.android.com/training/articles/security-key-attestation)
+a relying party can extract the digest and compare it with list of digests for
+known good operating systems which, if found, provides additional assurance
+about the device the application is running on.
+
+For [factory images of Pixel 3 and later
+devices](https://developers.google.com/android/images), the
+`pixel_factory_image_verify.py` located in `tools/transparency` is a convenience
+tool for downloading, verifying and calcuating VBMeta Digests.
+
+    $ pixel_factory_image_verify.py https://dl.google.com/dl/android/aosp/image.zip
+    Fetching file from: https://dl.google.com/dl/android/aosp/image.zip
+    Successfully downloaded file.
+    Successfully unpacked factory image.
+    Successfully unpacked factory image partitions.
+    Successfully verified VBmeta.
+    Successfully calculated VBMeta Digest.
+    The VBMeta Digest for factory image is: 1f329b20a2dd69425e7a29566ca870dad51d2c579311992d41c9ba9ba05e170e
+
+If the given argument is not an URL it considered to be a local file:
+
+    $ pixel_factory_image_verify.py image.zip
 
 # Tools and Libraries
 
@@ -156,6 +214,11 @@ design, this authority can be easily revoked by simply updating
 Storing signed verification data on other images - for example
 `boot.img` and `system.img` - is also done with `avbtool`.
 
+The minimum requirement for running `avbtool` is to either have
+Python 3.5 installed or build the avbtool with the embedded launcher
+using `m avbtool` and then run it out of the build artifact directory:
+`out/soong/host/linux-x86/bin/avbtool`
+
 In addition to `avbtool`, a library - `libavb` - is provided. This
 library performs all verification on the device side e.g. it starts by
 loading the `vbmeta` partition, checks the signature, and then goes on
@@ -166,11 +229,17 @@ well as operations that the boot loader or OS is expected to implement
 (see `avb_ops.h`). The main entry point for verification is
 `avb_slot_verify()`.
 
-Android Things has specific requirements and validation logic for the
-vbmeta public key. An extension is provided in `libavb_atx` which
-performs this validation as an implementation of `libavb`'s public key
-validation operation (see `avb_validate_vbmeta_public_key()` in
-`avb_ops.h`).
+An optional extension `libavb_cert` additionally provides a scalable
+certificate-based authorization mechanism. The base `libavb` requires
+the device to implement public key validation manually (see
+`avb_validate_vbmeta_public_key()` in `avb_ops.h`), which can be
+complicated when working with anything other than a single hardcoded
+key. `libavb_cert` provides an implementation of this function which
+provides built-in support for features such as key rotation.
+
+`libavb_cert` was previously named `libavb_atx` (Android Things eXtension) but
+it has been renamed to better represent its usefulness as a general-purpose
+extension rather than anything specific to the Android Things project.
 
 ## Files and Directories
 
@@ -184,8 +253,8 @@ validation operation (see `avb_validate_vbmeta_public_key()` in
       expected to be provided by the platform is defined in
       `avb_sysdeps.h`. If the platform provides the standard C runtime
       `avb_sysdeps_posix.c` can be used.
-* `libavb_atx/`
-    + An Android Things Extension for validating public key metadata.
+* `libavb_cert/`
+    + A libavb extension for certificate-based authorization.
 * `libavb_user/`
     + Contains an `AvbOps` implementation suitable for use in Android
       userspace. This is used in `boot_control.avb` and `avbctl`.
@@ -199,10 +268,6 @@ validation operation (see `avb_validate_vbmeta_public_key()` in
       boot loaders using the experimental `libavb_ab` A/B stack.
       **NOTE**: This code is *DEPRECATED* and will be removed Jun 1
       2018.
-* `contrib/`
-    + Contains patches needed in other projects for interoperability with AVB.
-      For example, `contrib/linux/4.4` has the patches for Linux kernel 4.4,
-      which are generated by `git format-patch`.
 * `Android.bp`
     + Build instructions for building `libavb` (a static library for use
       on the device), host-side libraries (for unit tests), and unit
@@ -212,16 +277,15 @@ validation operation (see `avb_validate_vbmeta_public_key()` in
       verified boot.
 * `test/`
     + Unit tests for `abvtool`, `libavb`, `libavb_ab`, and
-      `libavb_atx`.
+      `libavb_cert`.
 * `tools/avbctl/`
     + Contains the source-code for a tool that can be used to control
       AVB at runtime in Android.
 * `examples/uefi/`
     + Contains the source-code for a UEFI-based boot-loader utilizing
       `libavb/` and `libavb_ab/`.
-* `examples/things/`
-    + Contains the source-code for a slot verification suitable for Android
-      Things.
+* `examples/cert/`
+    + Contains example source-code for using the `avb_cert` extension
 * `README.md`
     + This file.
 * `docs/`
@@ -316,16 +380,18 @@ there is obviously no need to bump it again.
 
 The content for the vbmeta partition can be generated as follows:
 
-    $ avbtool make_vbmeta_image                                                    \
-        [--output OUTPUT]                                                          \
-        [--algorithm ALGORITHM] [--key /path/to/key_used_for_signing_or_pub_key]   \
-        [--public_key_metadata /path/to/pkmd.bin] [--rollback_index NUMBER]        \
-        [--include_descriptors_from_image /path/to/image.bin]                      \
-        [--setup_rootfs_from_kernel /path/to/image.bin]                            \
-        [--chain_partition part_name:rollback_index_location:/path/to/key1.bin]    \
-        [--signing_helper /path/to/external/signer]                                \
-        [--signing_helper_with_files /path/to/external/signer_with_files]          \
-        [--print_required_libavb_version]                                          \
+    $ avbtool make_vbmeta_image                                                                  \
+        [--output OUTPUT]                                                                        \
+        [--algorithm ALGORITHM] [--key /path/to/key_used_for_signing_or_pub_key]                 \
+        [--public_key_metadata /path/to/pkmd.bin]                                                \
+        [--rollback_index NUMBER] [--rollback_index_location NUMBER]                             \
+        [--include_descriptors_from_image /path/to/image.bin]                                    \
+        [--setup_rootfs_from_kernel /path/to/image.bin]                                          \
+        [--chain_partition part_name:rollback_index_location:/path/to/key1.bin]                  \
+        [--chain_partition_do_not_use_ab part_name:rollback_index_location:/path/to/key.bin]     \
+        [--signing_helper /path/to/external/signer]                                              \
+        [--signing_helper_with_files /path/to/external/signer_with_files]                        \
+        [--print_required_libavb_version]                                                        \
         [--append_to_release_string STR]
 
 An integrity footer containing the hash for an entire partition can be
@@ -335,7 +401,8 @@ added to an existing image as follows:
         --partition_name PARTNAME --partition_size SIZE                            \
         [--image IMAGE]                                                            \
         [--algorithm ALGORITHM] [--key /path/to/key_used_for_signing_or_pub_key]   \
-        [--public_key_metadata /path/to/pkmd.bin] [--rollback_index NUMBER]        \
+        [--public_key_metadata /path/to/pkmd.bin]                                  \
+        [--rollback_index NUMBER] [--rollback_index_location NUMBER]               \
         [--hash_algorithm HASH_ALG] [--salt HEX]                                   \
         [--include_descriptors_from_image /path/to/image.bin]                      \
         [--setup_rootfs_from_kernel /path/to/image.bin]                            \
@@ -348,6 +415,8 @@ added to an existing image as follows:
         [--do_not_use_ab]                                                          \
         [--use_persistent_digest]
 
+Valid values for `HASH_ALG` above include `sha1` and `sha256`.
+
 An integrity footer containing the root digest and salt for a hashtree
 for a partition can be added to an existing image as follows. The
 hashtree is also appended to the image.
@@ -356,7 +425,8 @@ hashtree is also appended to the image.
         --partition_name PARTNAME --partition_size SIZE                            \
         [--image IMAGE]                                                            \
         [--algorithm ALGORITHM] [--key /path/to/key_used_for_signing_or_pub_key]   \
-        [--public_key_metadata /path/to/pkmd.bin] [--rollback_index NUMBER]        \
+        [--public_key_metadata /path/to/pkmd.bin]                                  \
+        [--rollback_index NUMBER] [--rollback_index_location NUMBER]               \
         [--hash_algorithm HASH_ALG] [--salt HEX] [--block_size SIZE]               \
         [--include_descriptors_from_image /path/to/image.bin]                      \
         [--setup_rootfs_from_kernel /path/to/image.bin]                            \
@@ -369,7 +439,11 @@ hashtree is also appended to the image.
         [--append_to_release_string STR]                                           \
         [--calc_max_image_size]                                                    \
         [--do_not_use_ab]                                                          \
-        [--use_persistent_digest]
+        [--no_hashtree]                                                            \
+        [--use_persistent_digest]                                                  \
+        [--check_at_most_once]
+
+Valid values for `HASH_ALG` above include `sha1`, `sha256`, and `blake2b-256`.
 
 The size of an image with integrity footers can be changed using the
 `resize_image` command:
@@ -387,6 +461,18 @@ For hash- and hashtree-images the vbmeta struct can also be written to
 an external file via the `--output_vbmeta_image` option and one can
 also specify that the vbmeta struct and footer not be added to the
 image being operated on.
+
+The hashtree and FEC data in an image can be zeroed out with the following
+command:
+
+    $ avbtool zero_hashtree --image IMAGE
+
+This is useful for trading compressed image size for having to reculculate the
+hashtree and FEC at runtime. If this is done the hashtree and FEC data is set
+to zero except for the first eight bytes which are set to the magic
+`ZeRoHaSH`. Either the hashtree or FEC data or both may be zeroed this way
+so applications should check for the magic both places. Applications can
+use the magic to detect if recalculation is needed.
 
 To calculate the maximum size of an image that will fit in a partition
 of a given size after having used the `avbtool add_hash_footer` or
@@ -412,6 +498,12 @@ vbmeta struct when using `make_vbmeta_image`, `add_hash_footer`, and
         --include_descriptors_from_image /path/to/system.img \
         --print_required_libavb_version
     1.0
+
+Alternatively, `--no_hashtree` can be used with `avbtool add_hashtree_footer`
+command. If `--no_hashtree` is given, the hashtree blob is omitted and only
+its descriptor is added to the vbmeta struct. The descriptor says the size
+of hashtree is 0, which tells an application the need to recalculate
+hashtree.
 
 The `--signing_helper` option can be used in `make_vbmeta_image`,
 `add_hash_footer` and `add_hashtree_footer` commands to specify any
@@ -448,6 +540,10 @@ not using any vbmeta partitions, for example:
         --partition_size SIZE_OF_BOOT_PARTITION         \
         --vbmeta_image vbmeta.img
     $ fastboot flash boot boot-with-vbmeta-appended.img
+
+Information about an image can be obtained using the `info_image` command. The
+output of this command should not be relied on and the way information is
+structured may change.
 
 The `verify_image` command can be used to verify the contents of
 several image files at the same time. When invoked on an image the
@@ -503,6 +599,47 @@ hash and hashtree images.
 The `verify_image` command can also be used to check that a custom
 signing helper works as intended.
 
+The `calculate_vbmeta_digest` command can be used to calculate the vbmeta digest
+of several image files at the same time. The result is printed as a hexadecimal
+string either on `STDOUT` or a supplied path (using the `--output` option).
+
+    $ avbtool calculate_vbmeta_digest \
+         --hash_algorithm sha256 \
+         --image /path/to/vbmeta.img
+    a20fdd01a6638c55065fe08497186acde350d6797d59a55d70ffbcf41e95c2f5
+
+In this example the `calculate_vbmeta_digest` command loads the `vbmeta.img`
+file. If this image has one or more chain partition descriptors, the same logic
+as the `verify_image` command is used to load files for these (e.g. it assumes
+the same directory and file extension as the given image). Once all vbmeta
+structs have been loaded, the digest is calculated (using the hash algorithm
+given by the `--hash_algorithm` option) and printed out.
+
+To print hash and hashtree digests embedded in the verified metadata, use the
+`print_partition_digests` command like this:
+
+    $ avbtool print_partition_digests --image /path/to/vbmeta.img
+    system: ddaa513715fd2e22f3c1cea3c1a1f98ccb515fc6
+    boot: 5cba9a418e04b5f9e29ee6a250f6cdbe30c6cec867c59d388f141c3fedcb28c1
+    vendor: 06993a9e85e46e53d3892881bb75eff48ecadaa8
+
+For partitions with hash descriptors, this prints out the digest and for
+partitions with hashtree descriptors the root digest is printed out. Like the
+`calculate_vbmeta_digest` and `verify_image` commands, chain partitions are
+followed. To use JSON for the output, use the `--json` option.
+
+In case you would like to log all command lines for all avbtool invocations for
+debugging integrations with other tooling, you can configure the envirionment
+variable AVB_INVOCATION_LOGFILE with the name of the log file:
+
+    $ export AVB_INVOCATION_LOGFILE='/tmp/avb_invocation.log'
+    $ ./avbtool.py version
+    $ ./avbtool.py version
+    $ cat /tmp/avb_invocation.log
+    ./avbtool.py version
+    ./avbtool.py version
+
+
 ## Build System Integration
 
 In Android, AVB is enabled by the `BOARD_AVB_ENABLE` variable
@@ -513,9 +650,10 @@ This will make the build system create `vbmeta.img` which will contain
 a hash descriptor for `boot.img`, a hashtree descriptor for
 `system.img`, a kernel-cmdline descriptor for setting up `dm-verity`
 for `system.img` and append a hash-tree to `system.img`. If the build
-system is set up such that `vendor.img` is being built, a hash-tree
-will also be appended to this image and its hash-tree descriptor will
-be included in `vbmeta.img`.
+system is set up such that one or many of `vendor.img` / `product.img`
+/ `system_ext.img` / `odm.img` are being built, the hash-tree for each
+of them will also be appended to the image respectively, and their
+hash-tree descriptors will be included into `vbmeta.img` accordingly.
 
 By default, the algorithm `SHA256_RSA4096` is used with a test key
 from the `external/avb/test/data` directory. This can be overriden by
@@ -535,7 +673,31 @@ e.g. derive `AVB_pk`. Both `AVB_pk` and `AVB_pkmd` are passed to the
 `validate_vbmeta_public_key()` operation when verifying a slot.
 
 Some devices may support the end-user configuring the root of trust to use, see
-the [Device Specific Notes](#Device-Specific-Notes) section for details.
+the [Device Specific Notes](#device-specific-notes) section for details.
+
+Devices can be configured to create additional `vbmeta` partitions as
+[chained partitions](#the-vbmeta-struct) in order to update a subset of
+partitions without changing the top-level `vbmeta` partition. For example,
+the following variables create `vbmeta_system.img` as a chained `vbmeta`
+image that contains the hash-tree descriptors for `system.img`, `system_ext.img`
+and `product.img`. `vbmeta_system.img` itself will be signed by the specified
+key and algorithm.
+
+    BOARD_AVB_VBMETA_SYSTEM := system system_ext product
+    BOARD_AVB_VBMETA_SYSTEM_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem
+    BOARD_AVB_VBMETA_SYSTEM_ALGORITHM := SHA256_RSA2048
+    BOARD_AVB_VBMETA_SYSTEM_ROLLBACK_INDEX_LOCATION := 1
+
+Note that the hash-tree descriptors for `system.img`, `system_ext.img` and
+`product.img` will be included only in `vbmeta_system.img`, but not
+`vbmeta.img`. With the above setup, partitions `system.img`, `system_ext.img`,
+`product.img` and `vbmeta_system.img` can be updated independently - but as a
+group - of the rest of the partitions, *or* as part of the traditional updates
+that update all the partitions.
+
+Currently build system supports building chained `vbmeta` images of
+`vbmeta_system.img` (`BOARD_AVB_VBMETA_SYSTEM`) and `vbmeta_vendor.img`
+(`BOARD_AVB_VBMETA_VENDOR`).
 
 To prevent rollback attacks, the rollback index should be increased on
 a regular basis. The rollback index can be set with the
@@ -679,7 +841,7 @@ digest in the case of a hashtree) is not stored in the descriptor but
 is stored in a named persistent value. This allows configuration data
 which may differ from device to device to be verified by AVB. It must
 not be possible to modify the persistent digest when the device is in
-the LOCKED state.
+the LOCKED state, except if a digest does not exist it may be initialized.
 
 To specify that a descriptor should use a persistent digest, use the
 `--use_persistent_digest` option for the `add_hash_footer` or
@@ -693,6 +855,15 @@ will be available for substitution into kernel command line descriptors
 using a token of the form `$(AVB_FOO_ROOT_DIGEST)` where 'FOO' is the
 uppercase partition name, in this case for the partition named 'foo'.
 The token will be replaced by the digest in hexadecimal form.
+
+By default, when the `--use_persistent_digest` option is used with
+`add_hash_footer` or `add_hashtree_footer`, avbtool will generate a
+descriptor with no salt rather than the typical default of generating a
+random salt equal to the digest length. This is because the digest
+value is stored in persistent storage and thus cannot change over time.
+An alternative option would be to manually provide a random salt using
+`--salt`, but this salt would need to remain unchanged for the life
+of the device once the persistent digest value was written.
 
 ## Updating Stored Rollback Indexes
 
@@ -747,6 +918,13 @@ if (is_slot_is_marked_as_successful(slot->ab_suffix)) {
     }
 }
 ```
+
+This logic should ideally be implemented outside of the HLOS. One
+possible implementation is to update rollback indices in the
+bootloader when booting into a successful slot. This means that
+when booting into a new OS not yet marked as successful, the
+rollback indices would not be updated. The first reboot after the
+slot succeeded would trigger an update of the rollback indices.
 
 For an HLOS where it's possible to roll back to a previous version,
 `stored_rollback_index[n]` should be set to the largest possible value
@@ -803,6 +981,19 @@ Notes:
       be used to convey that the device is UNLOCKED (lightbars, LEDs,
       etc.).
 
+### Booting Into Recovery
+
+On Android devices not using A/B, the `recovery` partition usually isn't
+updated along with other partitions and therefore can't be referenced
+from the main `vbmeta` partition.
+
+It's still possible to use AVB to protect this partition (and others)
+by signing these partitions and passing the
+`AVB_SLOT_VERIFY_FLAGS_NO_VBMETA_PARTITION` flag to `avb_slot_verify()`.
+In this mode, the key used to sign each requested partition is verified
+by the `validate_public_key_for_partition()` operation which is also
+used to return the rollback index location to be used.
+
 ## Handling dm-verity Errors
 
 By design, hashtree verification errors are detected by the HLOS and
@@ -814,7 +1005,8 @@ be handled through the `hashtree_error_mode` parameter in the
   will invalidate the current slot and restart. On devices with A/B
   this would lead to attempting to boot the other slot (if it's marked
   as bootable) or it could lead to a mode where no OS can be booted
-  (e.g. some form of repair mode).
+  (e.g. some form of repair mode). In Linux this requires a kernel
+  built with `CONFIG_DM_VERITY_AVB`.
 
 * `AVB_HASHTREE_ERROR_MODE_RESTART` means that the OS will restart
   without the current slot being invalidated. Be careful using this
@@ -824,49 +1016,79 @@ be handled through the `hashtree_error_mode` parameter in the
 * `AVB_HASHTREE_ERROR_MODE_EIO` means that an `EIO` error will be
   returned to the application.
 
+* `AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO` means that either the **RESTART**
+  or **EIO** mode is used, depending on state. This mode implements a state
+  machine whereby **RESTART** is used by default and when the
+  `AVB_SLOT_VERIFY_FLAGS_RESTART_CAUSED_BY_HASHTREE_CORRUPTION` is passed to
+  `avb_slot_verify()` the mode transitions to **EIO**. When a new OS has been
+  detected the device transitions back to the **RESTART** mode.
+    + To do this persistent storage is needed - specifically this means that the
+      passed in `AvbOps` will need to have the `read_persistent_value()` and
+      `write_persistent_value()` operations implemented. The name of the
+      persistent value used is **avb.managed_verity_mode** and 32 bytes of storage
+      is needed.
+
 * `AVB_HASHTREE_ERROR_MODE_LOGGING` means that errors will be logged
    and corrupt data may be returned to applications. This mode should
    be used for **ONLY** diagnostics and debugging. It cannot be used
    unless verification errors are allowed.
 
-The value passed in `hashtree_error_mode` is essentially just passed
-on through to the HLOS through the the `androidboot.veritymode` and
-`androidboot.vbmeta.invalidate_on_error` kernel command-line
-parameters. The HLOS - including the Linux kernel when using
-`CONFIG_DM_VERITY_AVB` - will then act upon hashtree verification
-errors as specified.
+* `AVB_HASHTREE_ERROR_MODE_PANIC` means that the OS will **panic** without
+  the current slot being invalidated. Be careful using this mode as it may
+  introduce boot panic if the same hashtree verification error is hit on
+  every boot. This mode is available since: 1.7.0 (kernel 5.9)
+
+The value passed in `hashtree_error_mode` is essentially just passed on through
+to the HLOS through the the `androidboot.veritymode`,
+`androidboot.veritymode.managed`, and `androidboot.vbmeta.invalidate_on_error`
+kernel command-line parameters in the following way:
+
+|      | `androidboot.veritymode` | `androidboot.veritymode.managed` | `androidboot.vbmeta.invalidate_on_error` |
+|------|:------------------------:|:--------------------------------:|:----------------------------------------:|
+| `AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE` | **enforcing** | (unset) | **yes** |
+| `AVB_HASHTREE_ERROR_MODE_RESTART` | **enforcing** | (unset) | (unset) |
+| `AVB_HASHTREE_ERROR_MODE_EIO` | **eio** | (unset) | (unset) |
+| `AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO` | **eio** or **enforcing** | **yes** | (unset) |
+| `AVB_HASHTREE_ERROR_MODE_LOGGING` | **ignore_corruption** | (unset) | (unset) |
+| `AVB_HASHTREE_ERROR_MODE_PANIC` | **panicking** | (unset) | (unset) |
+
+The only exception to this table is that if the
+`AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED` flag is set in the top-level vbmeta,
+then `androidboot.veritymode` is set to **disabled** and
+`androidboot.veritymode.managed` and `androidboot.vbmeta.invalidate_on_error`
+are unset.
+
+The different values of `hashtree_error_mode` parameter in the `avb_slot_verify()`
+function can be categorized into three groups:
+
+* `AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE`, which needs `CONFIG_DM_VERITY_AVB`
+  in the kernel config for the kernel to invalidate the current slot and
+  restart. This is kept here for legacy Android Things devices and is not
+  recommended for other device form factors.
+
+* The bootloader handles the switch between `AVB_HASHTREE_ERROR_MODE_RESTART`
+  and `AVB_HASHTREE_ERROR_MODE_EIO`. This would need a persistent storage on the
+  device to store the vbmeta digest, so the bootloader can detect if a device
+  ever gets an update or not. Once the new OS is installed and if the device is
+  in **EIO** mode, the bootloader should switch back to **RESTART** mode.
+
+* `AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO`: `libavb` helps the
+  bootloader manage **EIO**/**RESTART** state transition. The bootloader needs
+  to implement the callbacks of `AvbOps->read_persistent_value()` and
+  `AvbOps->write_persistent_value()` for `libavb` to store the vbmeta digest to
+  detect whether a new OS is installed.
 
 ### Which mode should I use for my device?
 
 This depends entirely on the device, how the device is intended to be
 used, and the desired user experience.
 
-For example, consider
-the
-[EIO mode in an earlier version of Android Verified Boot](https://source.android.com/security/verifiedboot/verified-boot) (see
-the "Recovering from dm-verity errors" section). In a nutshell this
-mode uses `AVB_HASHTREE_ERROR_MODE_RESTART` mode until an error is
-encounted and then it switches to `AVB_HASHTREE_ERROR_MODE_EIO` mode
-on the reboot. Additionally when in `AVB_HASHTREE_ERROR_MODE_EIO` mode
-the user is informed that the device experienced corruption and then
-asked to click through a screen to continue.
+For Android devices the `AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO` mode
+should be used. Also see the [Boot Flow section on source.android.com](https://source.android.com/security/verifiedboot/boot-flow) for the kind of UX and UI the boot loader should implement.
 
-To implement this mode in a boot loader, a combination of the
-`AVB_HASHTREE_ERROR_MODE_RESTART` mode and
-`AVB_HASHTREE_ERROR_MODE_EIO` mode could be used along with persistent
-storage recording what mode the bootloader is currently in. This would
-need to include transition rules e.g. if the kernel indicates that it
-rebooted because of a `dm-verity` error the bootloader would need to
-transition from the `AVB_HASHTREE_ERROR_MODE_RESTART` mode to the
-`AVB_HASHTREE_ERROR_MODE_EIO` mode. Ditto, when the slot is updated
-the bootloader needs to transition from the
-`AVB_HASHTREE_ERROR_MODE_EIO` mode back to the
-`AVB_HASHTREE_ERROR_MODE_RESTART` mode so the user doesn't have to
-click through a screen on every boot.
-
-On the other hand, if the device doesn't have a screen or if the HLOS
-supports multiple bootable slots simultaneously it may make more sense
-to just use `AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE`.
+If the device doesn't have a screen or if the HLOS supports multiple bootable
+slots simultaneously it may make more sense to just use
+`AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE`.
 
 ## Android Specific Integration
 
@@ -878,16 +1100,46 @@ to indicate the boot state. It shall use the following values:
 * **yellow**: If in LOCKED state and the key used for verification was set by the end user.
 * **orange**: If in the UNLOCKED state.
 
+## GKI 2.0 Integration
+
+Starting from Android 12, devices launching with kernel version 5.10 or higher
+must ship with the GKI kernel. See [GKI 2.0](https://source.android.com/devices/architecture/kernel/generic-kernel-image#gki2)
+for details.
+
+While incorporating a certified GKI `boot.img` into a device codebase, the
+following board variables should be configured. The setting shown below is just
+an example to be adjusted per device.
+
+```
+# Uses a prebuilt boot.img
+TARGET_NO_KERNEL := true
+BOARD_PREBUILT_BOOTIMAGE := device/${company}/${board}/boot.img
+
+# Enables chained vbmeta for the boot.img so it can be updated independently,
+# without updating the vbmeta.img. The following configs are optional.
+# When they're absent, the hash of the boot.img will be stored then signed in
+# the vbmeta.img.
+BOARD_AVB_BOOT_KEY_PATH := external/avb/test/data/testkey_rsa4096.pem
+BOARD_AVB_BOOT_ALGORITHM := SHA256_RSA4096
+BOARD_AVB_BOOT_ROLLBACK_INDEX := $(PLATFORM_SECURITY_PATCH_TIMESTAMP)
+BOARD_AVB_BOOT_ROLLBACK_INDEX_LOCATION := 2
+```
+
+**NOTE**: The certified GKI `boot.img` isn't signed for verified boot.
+A device-specific verified boot chain should still be configured for a prebuilt
+GKI `boot.img`.
+
 ## Device Specific Notes
 
 This section contains information about how AVB is integrated into specific
 devices. This is not an exhaustive list.
 
-### Pixel 2
+### Pixel 2 and later
 
-On the Pixel 2 and Pixel 2 XL the boot loader supports a virtual partition with
-the name `avb_custom_key`. Flashing and erasing this partition only works in the
-UNLOCKED state. Setting the custom key is done like this:
+On the Pixel 2, Pixel 2 XL and later Pixel models, the boot loader supports a
+virtual partition with the name `avb_custom_key`. Flashing and erasing this
+partition only works in the UNLOCKED state. Setting the custom key is done like
+this:
 
     avbtool extract_public_key --key key.pem --output pkmd.bin
     fastboot flash avb_custom_key pkmd.bin
@@ -906,14 +1158,25 @@ part of the boot process to remind the user that the custom key is in use.
 
 # Version History
 
+### Version 1.3
+Version 1.3 adds support for the following:
+* A 32-bit `flags` element is added to a chain descriptor.
+* Support for chain partitions which don't use [A/B](#a_b-support).
+
+### Version 1.2
+
+Version 1.2 adds support for the following:
+* `rollback_index_location` field of the main vbmeta header.
+* `check_at_most_once` parameter of dm-verity in a hashtree descriptor.
+
 ### Version 1.1
 
 Version 1.1 adds support for the following:
 
 * A 32-bit `flags` element is added to hash and hashtree descriptors.
-* Support for partitions which don't use [A/B](#A_B-Support).
-* Tamper-evident [named persistent values](#Named-Persistent-Values).
-* [Persistent digests](#Persistent-Digests) for hash or hashtree descriptors.
+* Support for partitions which don't use [A/B](#a_b-support).
+* Tamper-evident [named persistent values](#named-persistent-values).
+* [Persistent digests](#persistent-digests) for hash or hashtree descriptors.
 
 ### Version 1.0
 

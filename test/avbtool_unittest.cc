@@ -22,19 +22,18 @@
  * SOFTWARE.
  */
 
-#include <iostream>
-
-#include <endian.h>
-#include <inttypes.h>
-#include <string.h>
-
+#include <android-base/file.h>
+#include <android-base/stringprintf.h>
 #include <base/files/file_util.h>
 #include <base/strings/string_split.h>
 #include <base/strings/string_util.h>
-#include <base/strings/stringprintf.h>
-
+#include <endian.h>
+#include <inttypes.h>
 #include <libavb/avb_sha.h>
 #include <libavb/libavb.h>
+#include <string.h>
+
+#include <iostream>
 
 #include "avb_unittest_util.h"
 #include "fake_avb_ops.h"
@@ -53,6 +52,10 @@ class AvbToolTest : public BaseAvbToolTest {
   }
 
   void AddHashFooterTest(bool sparse_image);
+  void CreateRootfsWithHashtreeFooter(bool sparse_image,
+                                      const std::string& hash_algorithm,
+                                      const std::string& root_digest,
+                                      std::filesystem::path* rootfs_path);
   void AddHashtreeFooterTest(bool sparse_image);
   void AddHashtreeFooterFECTest(bool sparse_image);
 
@@ -64,10 +67,10 @@ class AvbToolTest : public BaseAvbToolTest {
 // This test ensure that the version is increased in both
 // avb_boot_image.h and the avb tool.
 TEST_F(AvbToolTest, AvbVersionInSync) {
-  base::FilePath path = testdir_.Append("version.txt");
-  EXPECT_COMMAND(0, "./avbtool version > %s", path.value().c_str());
+  std::filesystem::path path = testdir_ / "version.txt";
+  EXPECT_COMMAND(0, "./avbtool.py version > %s", path.c_str());
   std::string printed_version;
-  ASSERT_TRUE(base::ReadFileToString(path, &printed_version));
+  ASSERT_TRUE(android::base::ReadFileToString(path.string(), &printed_version));
   base::TrimWhitespaceASCII(printed_version, base::TRIM_ALL, &printed_version);
   // See comments in libavb/avb_version.c and avbtool's get_release_string()
   // about being in sync.
@@ -76,10 +79,8 @@ TEST_F(AvbToolTest, AvbVersionInSync) {
 }
 
 TEST_F(AvbToolTest, DefaultReleaseString) {
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"));
+  GenerateVBMetaImage(
+      "vbmeta.img", "SHA256_RSA2048", 0, "test/data/testkey_rsa2048.pem");
 
   // Default release string is "avbtool " + avb_version_string().
   AvbVBMetaImageHeader h;
@@ -93,7 +94,7 @@ TEST_F(AvbToolTest, ReleaseStringAppend) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--append_to_release_string \"Woot XYZ\"");
 
   // Note that avbtool inserts the space by itself.
@@ -119,7 +120,7 @@ TEST_F(AvbToolTest, ReleaseStringAppendTruncated) {
       "vbmeta.img",
       "SHA256_RSA2048",
       0,
-      base::FilePath("test/data/testkey_rsa2048.pem"),
+      "test/data/testkey_rsa2048.pem",
       std::string("--append_to_release_string \"") + append_str + "\"");
 
   // This checks that it ends with a NUL byte.
@@ -138,11 +139,10 @@ TEST_F(AvbToolTest, ExtractPublicKey) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--internal_release_string \"\"");
 
-  std::string key_data =
-      PublicKeyAVB(base::FilePath("test/data/testkey_rsa2048.pem"));
+  std::string key_data = PublicKeyAVB("test/data/testkey_rsa2048.pem");
 
   AvbVBMetaImageHeader h;
   avb_vbmeta_image_header_to_host_byte_order(
@@ -161,7 +161,7 @@ TEST_F(AvbToolTest, CheckDescriptors) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--prop foo:brillo "
                       "--prop bar:chromeos "
                       "--prop prisoner:24601 "
@@ -267,20 +267,22 @@ TEST_F(AvbToolTest, Padding) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--internal_release_string \"\"");
 
   GenerateVBMetaImage("vbmeta_padded.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--internal_release_string \"\" --padding_size 4096");
 
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.img");
-  base::FilePath vbmeta_padded_path = testdir_.Append("vbmeta_padded.img");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.img";
+  std::filesystem::path vbmeta_padded_path = testdir_ / "vbmeta_padded.img";
   int64_t vbmeta_size, vbmeta_padded_size;
-  ASSERT_TRUE(base::GetFileSize(vbmeta_path, &vbmeta_size));
-  ASSERT_TRUE(base::GetFileSize(vbmeta_padded_path, &vbmeta_padded_size));
+  ASSERT_TRUE(
+      base::GetFileSize(base::FilePath(vbmeta_path.c_str()), &vbmeta_size));
+  ASSERT_TRUE(base::GetFileSize(base::FilePath(vbmeta_padded_path.c_str()),
+                                &vbmeta_padded_size));
 
   EXPECT_NE(vbmeta_size, vbmeta_padded_size);
 
@@ -297,7 +299,7 @@ TEST_F(AvbToolTest, CheckRollbackIndex) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       rollback_index,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--internal_release_string \"\"");
 
   AvbVBMetaImageHeader h;
@@ -307,11 +309,48 @@ TEST_F(AvbToolTest, CheckRollbackIndex) {
   EXPECT_EQ(rollback_index, h.rollback_index);
 }
 
+TEST_F(AvbToolTest, CheckRollbackIndexLocationOmitted) {
+  uint32_t expected_rollback_index_location = 0;
+
+  GenerateVBMetaImage("vbmeta.img",
+                      "SHA256_RSA2048",
+                      0,
+                      "test/data/testkey_rsa2048.pem",
+                      "--internal_release_string \"\"");
+
+  AvbVBMetaImageHeader h;
+  avb_vbmeta_image_header_to_host_byte_order(
+      reinterpret_cast<AvbVBMetaImageHeader*>(vbmeta_image_.data()), &h);
+
+  EXPECT_EQ(expected_rollback_index_location, h.rollback_index_location);
+  EXPECT_EQ(1u, h.required_libavb_version_major);
+  EXPECT_EQ(0u, h.required_libavb_version_minor);
+}
+
+TEST_F(AvbToolTest, CheckRollbackIndexLocation) {
+  uint32_t rollback_index_location = 42;
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--rollback_index_location %d",
+                                  rollback_index_location));
+
+  AvbVBMetaImageHeader h;
+  avb_vbmeta_image_header_to_host_byte_order(
+      reinterpret_cast<AvbVBMetaImageHeader*>(vbmeta_image_.data()), &h);
+
+  EXPECT_EQ(rollback_index_location, h.rollback_index_location);
+  EXPECT_EQ(1u, h.required_libavb_version_major);
+  EXPECT_EQ(2u, h.required_libavb_version_minor);
+}
+
 TEST_F(AvbToolTest, CheckPubkeyReturned) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--internal_release_string \"\"");
 
   const uint8_t* pubkey = NULL;
@@ -338,7 +377,7 @@ TEST_F(AvbToolTest, Info) {
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       "--prop foo:brillo "
                       "--prop bar:chromeos "
                       "--prop prisoner:24601 "
@@ -356,9 +395,11 @@ TEST_F(AvbToolTest, Info) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          3200 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Prop: foo -> 'brillo'\n"
@@ -372,7 +413,7 @@ TEST_F(AvbToolTest, Info) {
       "    Prop: blob -> '\\x00\\x00brillo "
       "ftw!\\x00\\x00\\x00\\x00\\x00\\x00\\x00\\n'\n"
       "    Prop: large_blob -> (2048 bytes)\n",
-      InfoImage(vbmeta_image_path_));
+      InfoImage(vbmeta_image_path_.string()));
 }
 
 static bool collect_descriptors(const AvbDescriptor* descriptor,
@@ -385,7 +426,7 @@ static bool collect_descriptors(const AvbDescriptor* descriptor,
 
 static std::string AddHashFooterGetExpectedVBMetaInfo(
     const bool sparse_image, const uint64_t partition_size) {
-  return base::StringPrintf(
+  return android::base::StringPrintf(
       "Footer version:           1.0\n"
       "Image size:               %" PRIu64
       " bytes\n"
@@ -397,9 +438,11 @@ static std::string AddHashFooterGetExpectedVBMetaInfo(
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          704 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
@@ -433,51 +476,51 @@ void AvbToolTest::AddHashFooterTest(bool sparse_image) {
       rootfs[n] = uint8_t(n);
     }
   }
-  base::FilePath ext_vbmeta_path = testdir_.Append("ext_vbmeta.bin");
-  base::FilePath rootfs_path = testdir_.Append("rootfs.bin");
+  std::filesystem::path external_vbmeta_path = testdir_ / "external_vbmeta.bin";
+  std::filesystem::path extracted_vbmeta_path =
+      testdir_ / "extracted_vbmeta.bin";
+  std::filesystem::path rootfs_path = testdir_ / "rootfs.bin";
   EXPECT_EQ(rootfs_size,
             static_cast<const size_t>(
-                base::WriteFile(rootfs_path,
+                base::WriteFile(base::FilePath(rootfs_path.c_str()),
                                 reinterpret_cast<const char*>(rootfs.data()),
                                 rootfs.size())));
 
   if (sparse_image) {
-    EXPECT_COMMAND(0,
-                   "mv %s %s.unsparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "img2simg %s.unsparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.value().c_str());
+    EXPECT_COMMAND(
+        0, "mv %s %s.unsparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "img2simg %s.unsparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.c_str());
   }
 
   /* Do this twice to check that 'add_hash_footer' is idempotent. */
   for (int n = 0; n < 2; n++) {
     EXPECT_COMMAND(0,
-                   "./avbtool add_hash_footer --salt d00df00d "
+                   "./avbtool.py add_hash_footer --salt d00df00d "
                    "--hash_algorithm sha256 --image %s "
                    "--partition_size %d --partition_name foobar "
                    "--algorithm SHA256_RSA2048 "
                    "--key test/data/testkey_rsa2048.pem "
                    "--output_vbmeta %s "
                    "--internal_release_string \"\"",
-                   rootfs_path.value().c_str(),
+                   rootfs_path.c_str(),
                    (int)partition_size,
-                   ext_vbmeta_path.value().c_str());
+                   external_vbmeta_path.c_str());
 
     ASSERT_EQ(AddHashFooterGetExpectedVBMetaInfo(sparse_image, partition_size),
-              InfoImage(rootfs_path));
+              InfoImage(rootfs_path.string()));
 
     ASSERT_EQ(
         "Minimum libavb version:   1.0\n"
         "Header Block:             256 bytes\n"
         "Authentication Block:     320 bytes\n"
         "Auxiliary Block:          704 bytes\n"
+        "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
         "Algorithm:                SHA256_RSA2048\n"
         "Rollback Index:           0\n"
         "Flags:                    0\n"
+        "Rollback Index Location:  0\n"
         "Release String:           ''\n"
         "Descriptors:\n"
         "    Hash descriptor:\n"
@@ -489,7 +532,18 @@ void AvbToolTest::AddHashFooterTest(bool sparse_image) {
         "9a58cc996d405e08a1e00f96dbfe9104fedf41cb83b1f"
         "5e4ed357fbcf58d88d9\n"
         "      Flags:                 0\n",
-        InfoImage(ext_vbmeta_path));
+        InfoImage(external_vbmeta_path.string()));
+
+    // Check that the extracted vbmeta matches the externally generally one.
+    EXPECT_COMMAND(0,
+                   "./avbtool.py extract_vbmeta_image --image %s "
+                   "--output %s",
+                   rootfs_path.c_str(),
+                   extracted_vbmeta_path.c_str());
+    EXPECT_COMMAND(0,
+                   "diff %s %s",
+                   external_vbmeta_path.c_str(),
+                   extracted_vbmeta_path.c_str());
   }
 
   // Resize the image and check that the only thing that has changed
@@ -498,29 +552,25 @@ void AvbToolTest::AddHashFooterTest(bool sparse_image) {
   // larger than the original rootfs but smaller than the current
   // partition size.
   EXPECT_COMMAND(1,
-                 "./avbtool resize_image --image %s "
+                 "./avbtool.py resize_image --image %s "
                  "--partition_size %d",
-                 rootfs_path.value().c_str(),
+                 rootfs_path.c_str(),
                  (int)(rootfs_size - 16 * 1024));
   EXPECT_COMMAND(0,
-                 "./avbtool resize_image --image %s "
+                 "./avbtool.py resize_image --image %s "
                  "--partition_size %d",
-                 rootfs_path.value().c_str(),
+                 rootfs_path.c_str(),
                  (int)resized_partition_size);
   ASSERT_EQ(
       AddHashFooterGetExpectedVBMetaInfo(sparse_image, resized_partition_size),
-      InfoImage(rootfs_path));
+      InfoImage(rootfs_path.string()));
 
   if (sparse_image) {
-    EXPECT_COMMAND(0,
-                   "mv %s %s.sparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "simg2img %s.sparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.value().c_str());
+    EXPECT_COMMAND(
+        0, "mv %s %s.sparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "simg2img %s.sparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.c_str());
   }
 
   // Manually calculate the hash to check that it agrees with avbtool.
@@ -535,7 +585,8 @@ void AvbToolTest::AddHashFooterTest(bool sparse_image) {
 
   // Now check that we can find the VBMeta block again from the footer.
   std::string part_data;
-  ASSERT_TRUE(base::ReadFileToString(rootfs_path, &part_data));
+  ASSERT_TRUE(
+      android::base::ReadFileToString(rootfs_path.string(), &part_data));
 
   // Check footer contains correct data.
   AvbFooter f;
@@ -591,30 +642,34 @@ void AvbToolTest::AddHashFooterTest(bool sparse_image) {
 
   // Check that the footer is correctly erased.
   EXPECT_COMMAND(
-      0, "./avbtool erase_footer --image %s", rootfs_path.value().c_str());
+      0, "./avbtool.py erase_footer --image %s", rootfs_path.c_str());
   int64_t erased_footer_file_size;
-  ASSERT_TRUE(base::GetFileSize(rootfs_path, &erased_footer_file_size));
+  ASSERT_TRUE(base::GetFileSize(base::FilePath(rootfs_path.c_str()),
+                                &erased_footer_file_size));
   EXPECT_EQ(static_cast<size_t>(erased_footer_file_size), rootfs_size);
 
   // Check that --do_not_append_vbmeta_image works as intended.
+  // In this case we don't modify the input image so it should work read-only.
+  EXPECT_COMMAND(0, "chmod a-w %s", rootfs_path.c_str());
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer --salt d00df00d "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--output_vbmeta %s_2nd_run --do_not_append_vbmeta_image "
                  "--internal_release_string \"\"",
-                 rootfs_path.value().c_str(),
+                 rootfs_path.c_str(),
                  (int)partition_size,
-                 ext_vbmeta_path.value().c_str());
+                 external_vbmeta_path.c_str());
   int64_t file_size;
-  ASSERT_TRUE(base::GetFileSize(rootfs_path, &file_size));
+  ASSERT_TRUE(
+      base::GetFileSize(base::FilePath(rootfs_path.c_str()), &file_size));
   EXPECT_EQ(static_cast<size_t>(file_size), rootfs_size);
   EXPECT_COMMAND(0,
                  "diff %s %s_2nd_run",
-                 ext_vbmeta_path.value().c_str(),
-                 ext_vbmeta_path.value().c_str());
+                 external_vbmeta_path.c_str(),
+                 external_vbmeta_path.c_str());
 }
 
 TEST_F(AvbToolTest, AddHashFooter) {
@@ -641,7 +696,9 @@ static std::string RemoveLinesStartingWith(const std::string& str,
   return ret;
 }
 
-TEST_F(AvbToolTest, AddHashFooterSparseWithHoleAtTheEnd) {
+// NOTE: make_ext4fs was removed and there is no replacement for how we use
+// it... so this is currently disabled..
+TEST_F(AvbToolTest, DISABLED_AddHashFooterSparseWithHoleAtTheEnd) {
   const size_t partition_size = 10 * 1024 * 1024;
   const size_t metadata_size = 128 * 1024;
 
@@ -650,28 +707,28 @@ TEST_F(AvbToolTest, AddHashFooterSparseWithHoleAtTheEnd) {
   // 0x00000000)" and not "Don't care". Instead, use make_ext4fs for
   // this since it will put a big hole (e.g. "Don't care" chunk) at
   // the end.
-  base::FilePath partition_path = testdir_.Append("partition.bin");
+  std::filesystem::path partition_path = testdir_ / "partition.bin";
   EXPECT_COMMAND(0,
                  "make_ext4fs -s -L test -l %zd %s",
                  partition_size - metadata_size,
-                 partition_path.value().c_str());
+                 partition_path.c_str());
 
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer --salt d00df00d "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\"",
-                 partition_path.value().c_str(),
+                 partition_path.c_str(),
                  (int)partition_size);
 
   // Since we may be using an arbritary version of make_ext4fs
   // (because of different branches) the contents of the resulting
   // disk image may slightly change. It's enough to just remove the
   // "Digest:" line from the output to work around this.
-  std::string info =
-      RemoveLinesStartingWith(InfoImage(partition_path), "      Digest:");
+  std::string info = RemoveLinesStartingWith(InfoImage(partition_path.string()),
+                                             "      Digest:");
   ASSERT_EQ(
       "Footer version:           1.0\n"
       "Image size:               10485760 bytes\n"
@@ -683,9 +740,11 @@ TEST_F(AvbToolTest, AddHashFooterSparseWithHoleAtTheEnd) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          704 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
@@ -696,29 +755,28 @@ TEST_F(AvbToolTest, AddHashFooterSparseWithHoleAtTheEnd) {
       "      Flags:                 0\n",
       info);
 
-  EXPECT_COMMAND(0,
-                 "mv %s %s.sparse",
-                 partition_path.value().c_str(),
-                 partition_path.value().c_str());
+  EXPECT_COMMAND(
+      0, "mv %s %s.sparse", partition_path.c_str(), partition_path.c_str());
   EXPECT_COMMAND(0,
                  "simg2img %s.sparse %s",
-                 partition_path.value().c_str(),
-                 partition_path.value().c_str());
-  EXPECT_COMMAND(0, "rm -f %s.sparse", partition_path.value().c_str());
+                 partition_path.c_str(),
+                 partition_path.c_str());
+  EXPECT_COMMAND(0, "rm -f %s.sparse", partition_path.c_str());
 }
 
 TEST_F(AvbToolTest, AddHashFooterCalcMaxImageSize) {
   const size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath output_path = testdir_.Append("max_size.txt");
+  std::filesystem::path output_path = testdir_ / "max_size.txt";
 
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer "
+                 "./avbtool.py add_hash_footer "
                  "--partition_size %zd "
                  "--calc_max_image_size > %s",
                  partition_size,
-                 output_path.value().c_str());
+                 output_path.c_str());
   std::string max_image_size_data;
-  EXPECT_TRUE(base::ReadFileToString(output_path, &max_image_size_data));
+  EXPECT_TRUE(android::base::ReadFileToString(output_path.string(),
+                                              &max_image_size_data));
   EXPECT_EQ("10416128\n", max_image_size_data);
   size_t max_image_size = atoll(max_image_size_data.c_str());
 
@@ -727,9 +785,9 @@ TEST_F(AvbToolTest, AddHashFooterCalcMaxImageSize) {
 
   // Check that we can add a hash footer for an image this size for
   // such a partition size.
-  base::FilePath boot_path = GenerateImage("boot", max_image_size);
+  std::string boot_path = GenerateImage("boot", max_image_size);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer"
+                 "./avbtool.py add_hash_footer"
                  " --image %s"
                  " --partition_name boot"
                  " --partition_size %zd"
@@ -737,22 +795,22 @@ TEST_F(AvbToolTest, AddHashFooterCalcMaxImageSize) {
                  " --algorithm SHA512_RSA4096 "
                  " --key test/data/testkey_rsa4096.pem"
                  " --internal_release_string \"\"",
-                 boot_path.value().c_str(),
+                 boot_path.c_str(),
                  partition_size);
 }
 
 TEST_F(AvbToolTest, AddHashFooterWithPersistentDigest) {
   size_t partition_size = 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", 1024);
+  std::string path = GenerateImage("digest_location", 1024);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--use_persistent_digest",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are two important bits specific to these flags:
   //   Minimum libavb version = 1.1
@@ -768,16 +826,18 @@ TEST_F(AvbToolTest, AddHashFooterWithPersistentDigest) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          704 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
       "      Image Size:            1024 bytes\n"
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        foobar\n"
-      "      Salt:                  d00df00d\n"
+      "      Salt:                  \n"
       "      Digest:                \n"
       "      Flags:                 0\n",
       InfoImage(path));
@@ -785,16 +845,16 @@ TEST_F(AvbToolTest, AddHashFooterWithPersistentDigest) {
 
 TEST_F(AvbToolTest, AddHashFooterWithNoAB) {
   size_t partition_size = 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", 1024);
+  std::string path = GenerateImage("digest_location", 1024);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer --salt d00df00d "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--do_not_use_ab",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are two important bits specific to these flags:
   //   Minimum libavb version = 1.1
@@ -810,9 +870,11 @@ TEST_F(AvbToolTest, AddHashFooterWithNoAB) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          704 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
@@ -828,16 +890,16 @@ TEST_F(AvbToolTest, AddHashFooterWithNoAB) {
 
 TEST_F(AvbToolTest, AddHashFooterWithPersistentDigestAndNoAB) {
   size_t partition_size = 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", 1024);
+  std::string path = GenerateImage("digest_location", 1024);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--use_persistent_digest --do_not_use_ab",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are three important bits specific to these flags:
   //   Minimum libavb version = 1.1
@@ -854,22 +916,28 @@ TEST_F(AvbToolTest, AddHashFooterWithPersistentDigestAndNoAB) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          704 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hash descriptor:\n"
       "      Image Size:            1024 bytes\n"
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        foobar\n"
-      "      Salt:                  d00df00d\n"
+      "      Salt:                  \n"
       "      Digest:                \n"
       "      Flags:                 1\n",
       InfoImage(path));
 }
 
-void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
+void AvbToolTest::CreateRootfsWithHashtreeFooter(
+    bool sparse_image,
+    const std::string& hash_algorithm,
+    const std::string& root_digest,
+    std::filesystem::path* output_rootfs_path) {
   const size_t rootfs_size = 1028 * 1024;
   const size_t partition_size = 1536 * 1024;
 
@@ -878,113 +946,155 @@ void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
   rootfs.resize(rootfs_size);
   for (size_t n = 0; n < rootfs_size; n++)
     rootfs[n] = uint8_t(n);
-  base::FilePath ext_vbmeta_path = testdir_.Append("ext_vbmeta.bin");
-  base::FilePath rootfs_path = testdir_.Append("rootfs.bin");
+  std::filesystem::path external_vbmeta_path = testdir_ / "external_vbmeta.bin";
+  std::filesystem::path extracted_vbmeta_path =
+      testdir_ / "extracted_vbmeta.bin";
+  std::filesystem::path rootfs_path = testdir_ / "rootfs.bin";
   EXPECT_EQ(rootfs_size,
             static_cast<const size_t>(
-                base::WriteFile(rootfs_path,
+                base::WriteFile(base::FilePath(rootfs_path.c_str()),
                                 reinterpret_cast<const char*>(rootfs.data()),
                                 rootfs.size())));
 
   if (sparse_image) {
-    EXPECT_COMMAND(0,
-                   "mv %s %s.unsparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "img2simg %s.unsparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.value().c_str());
+    EXPECT_COMMAND(
+        0, "mv %s %s.unsparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "img2simg %s.unsparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.c_str());
   }
 
   /* Do this twice to check that 'add_hashtree_footer' is idempotent. */
   for (int n = 0; n < 2; n++) {
+    EXPECT_COMMAND(
+        0,
+        "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+        "--hash_algorithm %s "
+        "--partition_size %d --partition_name foobar "
+        "--algorithm SHA256_RSA2048 "
+        "--key test/data/testkey_rsa2048.pem "
+        "--output_vbmeta_image %s "
+        "--internal_release_string \"\" "
+        "--do_not_generate_fec",
+        rootfs_path.c_str(),
+        hash_algorithm.c_str(),
+        (int)partition_size,
+        external_vbmeta_path.c_str());
+
+    ASSERT_EQ(android::base::StringPrintf(
+                  "Footer version:           1.0\n"
+                  "Image size:               1572864 bytes\n"
+                  "Original image size:      1052672 bytes\n"
+                  "VBMeta offset:            1069056\n"
+                  "VBMeta size:              1344 bytes\n"
+                  "--\n"
+                  "Minimum libavb version:   1.0%s\n"
+                  "Header Block:             256 bytes\n"
+                  "Authentication Block:     320 bytes\n"
+                  "Auxiliary Block:          768 bytes\n"
+                  "Public key (sha1):        "
+                  "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+                  "Algorithm:                SHA256_RSA2048\n"
+                  "Rollback Index:           0\n"
+                  "Flags:                    0\n"
+                  "Rollback Index Location:  0\n"
+                  "Release String:           ''\n"
+                  "Descriptors:\n"
+                  "    Hashtree descriptor:\n"
+                  "      Version of dm-verity:  1\n"
+                  "      Image Size:            1052672 bytes\n"
+                  "      Tree Offset:           1052672\n"
+                  "      Tree Size:             16384 bytes\n"
+                  "      Data Block Size:       4096 bytes\n"
+                  "      Hash Block Size:       4096 bytes\n"
+                  "      FEC num roots:         0\n"
+                  "      FEC offset:            0\n"
+                  "      FEC size:              0 bytes\n"
+                  "      Hash Algorithm:        %s\n"
+                  "      Partition Name:        foobar\n"
+                  "      Salt:                  d00df00d\n"
+                  "      Root Digest:           "
+                  "%s\n"
+                  "      Flags:                 0\n",
+                  sparse_image ? " (Sparse)" : "",
+                  hash_algorithm.c_str(),
+                  root_digest.c_str()),
+              InfoImage(rootfs_path.string()));
+
+    ASSERT_EQ(android::base::StringPrintf(
+                  "Minimum libavb version:   1.0\n"
+                  "Header Block:             256 bytes\n"
+                  "Authentication Block:     320 bytes\n"
+                  "Auxiliary Block:          768 bytes\n"
+                  "Public key (sha1):        "
+                  "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+                  "Algorithm:                SHA256_RSA2048\n"
+                  "Rollback Index:           0\n"
+                  "Flags:                    0\n"
+                  "Rollback Index Location:  0\n"
+                  "Release String:           ''\n"
+                  "Descriptors:\n"
+                  "    Hashtree descriptor:\n"
+                  "      Version of dm-verity:  1\n"
+                  "      Image Size:            1052672 bytes\n"
+                  "      Tree Offset:           1052672\n"
+                  "      Tree Size:             16384 bytes\n"
+                  "      Data Block Size:       4096 bytes\n"
+                  "      Hash Block Size:       4096 bytes\n"
+                  "      FEC num roots:         0\n"
+                  "      FEC offset:            0\n"
+                  "      FEC size:              0 bytes\n"
+                  "      Hash Algorithm:        %s\n"
+                  "      Partition Name:        foobar\n"
+                  "      Salt:                  d00df00d\n"
+                  "      Root Digest:           "
+                  "%s\n"
+                  "      Flags:                 0\n",
+                  hash_algorithm.c_str(),
+                  root_digest.c_str()),
+              InfoImage(external_vbmeta_path.string()));
+
+    // Check that the extracted vbmeta matches the externally generally one.
     EXPECT_COMMAND(0,
-                   "./avbtool add_hashtree_footer --salt d00df00d --image %s "
-                   "--partition_size %d --partition_name foobar "
-                   "--algorithm SHA256_RSA2048 "
-                   "--key test/data/testkey_rsa2048.pem "
-                   "--output_vbmeta_image %s "
-                   "--internal_release_string \"\" "
-                   "--do_not_generate_fec",
-                   rootfs_path.value().c_str(),
-                   (int)partition_size,
-                   ext_vbmeta_path.value().c_str());
-
-    ASSERT_EQ(base::StringPrintf("Footer version:           1.0\n"
-                                 "Image size:               1572864 bytes\n"
-                                 "Original image size:      1052672 bytes\n"
-                                 "VBMeta offset:            1069056\n"
-                                 "VBMeta size:              1344 bytes\n"
-                                 "--\n"
-                                 "Minimum libavb version:   1.0%s\n"
-                                 "Header Block:             256 bytes\n"
-                                 "Authentication Block:     320 bytes\n"
-                                 "Auxiliary Block:          768 bytes\n"
-                                 "Algorithm:                SHA256_RSA2048\n"
-                                 "Rollback Index:           0\n"
-                                 "Flags:                    0\n"
-                                 "Release String:           ''\n"
-                                 "Descriptors:\n"
-                                 "    Hashtree descriptor:\n"
-                                 "      Version of dm-verity:  1\n"
-                                 "      Image Size:            1052672 bytes\n"
-                                 "      Tree Offset:           1052672\n"
-                                 "      Tree Size:             16384 bytes\n"
-                                 "      Data Block Size:       4096 bytes\n"
-                                 "      Hash Block Size:       4096 bytes\n"
-                                 "      FEC num roots:         0\n"
-                                 "      FEC offset:            0\n"
-                                 "      FEC size:              0 bytes\n"
-                                 "      Hash Algorithm:        sha1\n"
-                                 "      Partition Name:        foobar\n"
-                                 "      Salt:                  d00df00d\n"
-                                 "      Root Digest:           "
-                                 "e811611467dcd6e8dc4324e45f706c2bdd51db67\n"
-                                 "      Flags:                 0\n",
-                                 sparse_image ? " (Sparse)" : ""),
-              InfoImage(rootfs_path));
-
-    ASSERT_EQ(
-        "Minimum libavb version:   1.0\n"
-        "Header Block:             256 bytes\n"
-        "Authentication Block:     320 bytes\n"
-        "Auxiliary Block:          768 bytes\n"
-        "Algorithm:                SHA256_RSA2048\n"
-        "Rollback Index:           0\n"
-        "Flags:                    0\n"
-        "Release String:           ''\n"
-        "Descriptors:\n"
-        "    Hashtree descriptor:\n"
-        "      Version of dm-verity:  1\n"
-        "      Image Size:            1052672 bytes\n"
-        "      Tree Offset:           1052672\n"
-        "      Tree Size:             16384 bytes\n"
-        "      Data Block Size:       4096 bytes\n"
-        "      Hash Block Size:       4096 bytes\n"
-        "      FEC num roots:         0\n"
-        "      FEC offset:            0\n"
-        "      FEC size:              0 bytes\n"
-        "      Hash Algorithm:        sha1\n"
-        "      Partition Name:        foobar\n"
-        "      Salt:                  d00df00d\n"
-        "      Root Digest:           "
-        "e811611467dcd6e8dc4324e45f706c2bdd51db67\n"
-        "      Flags:                 0\n",
-        InfoImage(ext_vbmeta_path));
+                   "./avbtool.py extract_vbmeta_image --image %s "
+                   "--output %s",
+                   rootfs_path.c_str(),
+                   extracted_vbmeta_path.c_str());
+    EXPECT_COMMAND(0,
+                   "diff %s %s",
+                   external_vbmeta_path.c_str(),
+                   extracted_vbmeta_path.c_str());
   }
 
+  *output_rootfs_path = rootfs_path.c_str();
+}
+
+void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
+  std::filesystem::path rootfs_path;
+  CreateRootfsWithHashtreeFooter(sparse_image,
+                                 "sha1",
+                                 "e811611467dcd6e8dc4324e45f706c2bdd51db67",
+                                 &rootfs_path);
+
+  /* Zero the hashtree on a copy of the image. */
+  EXPECT_COMMAND(0, "cp %s %s.zht", rootfs_path.c_str(), rootfs_path.c_str());
+  EXPECT_COMMAND(
+      0, "./avbtool.py zero_hashtree --image %s.zht ", rootfs_path.c_str());
+
   if (sparse_image) {
+    EXPECT_COMMAND(
+        0, "mv %s %s.sparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "simg2img %s.sparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.c_str());
+
+    EXPECT_COMMAND(
+        0, "mv %s.zht %s.zht.sparse", rootfs_path.c_str(), rootfs_path.c_str());
     EXPECT_COMMAND(0,
-                   "mv %s %s.sparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "simg2img %s.sparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.value().c_str());
+                   "simg2img %s.zht.sparse %s.zht",
+                   rootfs_path.c_str(),
+                   rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.zht.sparse", rootfs_path.c_str());
   }
 
   // To check that we generate the correct hashtree we can use
@@ -1003,12 +1113,18 @@ void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
                  "verify "
                  "%s %s "
                  "e811611467dcd6e8dc4324e45f706c2bdd51db67",
-                 rootfs_path.value().c_str(),
-                 rootfs_path.value().c_str());
+                 rootfs_path.c_str(),
+                 rootfs_path.c_str());
 
   // Now check that we can find the VBMeta block again from the footer.
   std::string part_data;
-  ASSERT_TRUE(base::ReadFileToString(rootfs_path, &part_data));
+  ASSERT_TRUE(
+      android::base::ReadFileToString(rootfs_path.string(), &part_data));
+
+  // Also read the zeroed hash-tree version.
+  std::string zht_part_data;
+  ASSERT_TRUE(base::ReadFileToString(
+      base::FilePath(rootfs_path.string() + ".zht"), &zht_part_data));
 
   // Check footer contains correct data.
   AvbFooter f;
@@ -1067,27 +1183,57 @@ void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
   EXPECT_EQ("e811611467dcd6e8dc4324e45f706c2bdd51db67",
             mem_to_hexstring(desc_end + o, d.root_digest_len));
 
+  // Check that the zeroed hashtree version differ only by the hashtree + fec
+  // being zeroed out.
+  EXPECT_EQ(part_data.size(), zht_part_data.size());
+  size_t zht_ht_begin = d.tree_offset;
+  size_t zht_ht_end = zht_ht_begin + d.tree_size;
+  size_t zht_fec_begin = zht_ht_end;
+  size_t zht_fec_end = zht_fec_begin + d.fec_size;
+  EXPECT_EQ(0, memcmp(part_data.data(), zht_part_data.data(), zht_ht_begin));
+  EXPECT_NE(0,
+            memcmp(part_data.data() + zht_ht_begin,
+                   zht_part_data.data() + zht_ht_begin,
+                   zht_fec_end - zht_ht_begin));
+  EXPECT_EQ(0,
+            memcmp(part_data.data() + zht_fec_end,
+                   zht_part_data.data() + zht_fec_end,
+                   zht_part_data.size() - zht_fec_end));
+  EXPECT_EQ(0, strncmp(zht_part_data.data() + zht_ht_begin, "ZeRoHaSH", 8));
+  for (size_t n = zht_ht_begin + 8; n < zht_ht_end; n++) {
+    EXPECT_EQ(0, zht_part_data.data()[n]);
+  }
+  if (d.fec_size > 0) {
+    EXPECT_EQ(0, strncmp(zht_part_data.data() + zht_fec_begin, "ZeRoHaSH", 8));
+    for (size_t n = zht_fec_begin + 8; n < zht_fec_end; n++) {
+      EXPECT_EQ(0, zht_part_data.data()[n]);
+    }
+  }
+
   // Check that we correctly generate dm-verity kernel cmdline
   // snippets, if requested.
-  base::FilePath vbmeta_dmv_path = testdir_.Append("vbmeta_dm_verity_desc.bin");
+  std::filesystem::path vbmeta_dmv_path =
+      testdir_ / "vbmeta_dm_verity_desc.bin";
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--setup_rootfs_from_kernel %s "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\"",
-                 vbmeta_dmv_path.value().c_str(),
-                 rootfs_path.value().c_str());
+                 vbmeta_dmv_path.c_str(),
+                 rootfs_path.c_str());
 
   ASSERT_EQ(
       "Minimum libavb version:   1.0\n"
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          896 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Kernel Cmdline descriptor:\n"
@@ -1100,41 +1246,45 @@ void AvbToolTest::AddHashtreeFooterTest(bool sparse_image) {
       "      Flags:                 2\n"
       "      Kernel Cmdline:        "
       "'root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)'\n",
-      InfoImage(vbmeta_dmv_path));
+      InfoImage(vbmeta_dmv_path.string()));
 
   // Check that the footer is correctly erased and the hashtree
   // remains - see above for why the constant 1069056 is used.
   EXPECT_COMMAND(0,
-                 "./avbtool erase_footer --image %s --keep_hashtree",
-                 rootfs_path.value().c_str());
+                 "./avbtool.py erase_footer --image %s --keep_hashtree",
+                 rootfs_path.c_str());
   int64_t erased_footer_file_size;
-  ASSERT_TRUE(base::GetFileSize(rootfs_path, &erased_footer_file_size));
+  ASSERT_TRUE(base::GetFileSize(base::FilePath(rootfs_path.c_str()),
+                                &erased_footer_file_size));
   EXPECT_EQ(static_cast<size_t>(erased_footer_file_size), 1069056UL);
 
+  const size_t rootfs_size = 1028 * 1024;
+  const size_t partition_size = 1536 * 1024;
+  std::filesystem::path external_vbmeta_path = testdir_ / "external_vbmeta.bin";
   // Check that --do_not_append_vbmeta_image works as intended.
   //
   // For this we need to reset the size of the image to the original
   // size because it's not possible to identify the existing hashtree.
-  EXPECT_COMMAND(
-      0, "truncate -s %d %s", (int)rootfs_size, rootfs_path.value().c_str());
+  EXPECT_COMMAND(0, "truncate -s %d %s", (int)rootfs_size, rootfs_path.c_str());
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer --salt d00df00d --image %s "
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--output_vbmeta %s_2nd_run --do_not_append_vbmeta_image "
                  "--internal_release_string \"\" "
                  "--do_not_generate_fec",
-                 rootfs_path.value().c_str(),
+                 rootfs_path.c_str(),
                  (int)partition_size,
-                 ext_vbmeta_path.value().c_str());
+                 external_vbmeta_path.c_str());
   int64_t file_size;
-  ASSERT_TRUE(base::GetFileSize(rootfs_path, &file_size));
+  ASSERT_TRUE(
+      base::GetFileSize(base::FilePath(rootfs_path.c_str()), &file_size));
   EXPECT_EQ(static_cast<size_t>(file_size), 1069056UL);
   EXPECT_COMMAND(0,
                  "diff %s %s_2nd_run",
-                 ext_vbmeta_path.value().c_str(),
-                 ext_vbmeta_path.value().c_str());
+                 external_vbmeta_path.c_str(),
+                 external_vbmeta_path.c_str());
 }
 
 TEST_F(AvbToolTest, AddHashtreeFooter) {
@@ -1143,6 +1293,15 @@ TEST_F(AvbToolTest, AddHashtreeFooter) {
 
 TEST_F(AvbToolTest, AddHashtreeFooterSparse) {
   AddHashtreeFooterTest(true);
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterSparseWithBlake2b256) {
+  std::filesystem::path rootfs_path;
+  CreateRootfsWithHashtreeFooter(
+      true,
+      "blake2b-256",
+      "9ed423dda921619181bf1889746fe2dd28ae1e673be8d802b4713122e3209513",
+      &rootfs_path);
 }
 
 void AvbToolTest::AddHashtreeFooterFECTest(bool sparse_image) {
@@ -1154,88 +1313,104 @@ void AvbToolTest::AddHashtreeFooterFECTest(bool sparse_image) {
   rootfs.resize(rootfs_size);
   for (size_t n = 0; n < rootfs_size; n++)
     rootfs[n] = uint8_t(n);
-  base::FilePath rootfs_path = testdir_.Append("rootfs.bin");
+  std::filesystem::path rootfs_path = testdir_ / "rootfs.bin";
   EXPECT_EQ(rootfs_size,
             static_cast<const size_t>(
-                base::WriteFile(rootfs_path,
+                base::WriteFile(base::FilePath(rootfs_path.c_str()),
                                 reinterpret_cast<const char*>(rootfs.data()),
                                 rootfs.size())));
 
   if (sparse_image) {
-    EXPECT_COMMAND(0,
-                   "mv %s %s.unsparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "img2simg %s.unsparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.value().c_str());
+    EXPECT_COMMAND(
+        0, "mv %s %s.unsparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "img2simg %s.unsparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.unsparse", rootfs_path.c_str());
   }
 
   /* Do this twice to check that 'add_hashtree_footer' is idempotent. */
   for (int n = 0; n < 2; n++) {
-    EXPECT_COMMAND(0,
-                   "./avbtool add_hashtree_footer --salt d00df00d --image %s "
-                   "--partition_size %d --partition_name foobar "
-                   "--algorithm SHA256_RSA2048 "
-                   "--key test/data/testkey_rsa2048.pem "
-                   "--internal_release_string \"\"",
-                   rootfs_path.value().c_str(),
-                   (int)partition_size);
+    EXPECT_COMMAND(
+        0,
+        "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+        "--partition_size %d --partition_name foobar "
+        "--algorithm SHA256_RSA2048 "
+        "--key test/data/testkey_rsa2048.pem "
+        "--internal_release_string \"\"",
+        rootfs_path.c_str(),
+        (int)partition_size);
 
-    ASSERT_EQ(base::StringPrintf("Footer version:           1.0\n"
-                                 "Image size:               1572864 bytes\n"
-                                 "Original image size:      1052672 bytes\n"
-                                 "VBMeta offset:            1085440\n"
-                                 "VBMeta size:              1344 bytes\n"
-                                 "--\n"
-                                 "Minimum libavb version:   1.0%s\n"
-                                 "Header Block:             256 bytes\n"
-                                 "Authentication Block:     320 bytes\n"
-                                 "Auxiliary Block:          768 bytes\n"
-                                 "Algorithm:                SHA256_RSA2048\n"
-                                 "Rollback Index:           0\n"
-                                 "Flags:                    0\n"
-                                 "Release String:           ''\n"
-                                 "Descriptors:\n"
-                                 "    Hashtree descriptor:\n"
-                                 "      Version of dm-verity:  1\n"
-                                 "      Image Size:            1052672 bytes\n"
-                                 "      Tree Offset:           1052672\n"
-                                 "      Tree Size:             16384 bytes\n"
-                                 "      Data Block Size:       4096 bytes\n"
-                                 "      Hash Block Size:       4096 bytes\n"
-                                 "      FEC num roots:         2\n"
-                                 "      FEC offset:            1069056\n"
-                                 "      FEC size:              16384 bytes\n"
-                                 "      Hash Algorithm:        sha1\n"
-                                 "      Partition Name:        foobar\n"
-                                 "      Salt:                  d00df00d\n"
-                                 "      Root Digest:           "
-                                 "e811611467dcd6e8dc4324e45f706c2bdd51db67\n"
-                                 "      Flags:                 0\n",
-                                 sparse_image ? " (Sparse)" : ""),
-              InfoImage(rootfs_path));
+    ASSERT_EQ(android::base::StringPrintf(
+                  "Footer version:           1.0\n"
+                  "Image size:               1572864 bytes\n"
+                  "Original image size:      1052672 bytes\n"
+                  "VBMeta offset:            1085440\n"
+                  "VBMeta size:              1344 bytes\n"
+                  "--\n"
+                  "Minimum libavb version:   1.0%s\n"
+                  "Header Block:             256 bytes\n"
+                  "Authentication Block:     320 bytes\n"
+                  "Auxiliary Block:          768 bytes\n"
+                  "Public key (sha1):        "
+                  "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+                  "Algorithm:                SHA256_RSA2048\n"
+                  "Rollback Index:           0\n"
+                  "Flags:                    0\n"
+                  "Rollback Index Location:  0\n"
+                  "Release String:           ''\n"
+                  "Descriptors:\n"
+                  "    Hashtree descriptor:\n"
+                  "      Version of dm-verity:  1\n"
+                  "      Image Size:            1052672 bytes\n"
+                  "      Tree Offset:           1052672\n"
+                  "      Tree Size:             16384 bytes\n"
+                  "      Data Block Size:       4096 bytes\n"
+                  "      Hash Block Size:       4096 bytes\n"
+                  "      FEC num roots:         2\n"
+                  "      FEC offset:            1069056\n"
+                  "      FEC size:              16384 bytes\n"
+                  "      Hash Algorithm:        sha1\n"
+                  "      Partition Name:        foobar\n"
+                  "      Salt:                  d00df00d\n"
+                  "      Root Digest:           "
+                  "e811611467dcd6e8dc4324e45f706c2bdd51db67\n"
+                  "      Flags:                 0\n",
+                  sparse_image ? " (Sparse)" : ""),
+              InfoImage(rootfs_path.string()));
   }
 
+  /* Zero the hashtree and FEC on a copy of the image. */
+  EXPECT_COMMAND(0, "cp %s %s.zht", rootfs_path.c_str(), rootfs_path.c_str());
+  EXPECT_COMMAND(
+      0, "./avbtool.py zero_hashtree --image %s.zht ", rootfs_path.c_str());
+
   if (sparse_image) {
+    EXPECT_COMMAND(
+        0, "mv %s %s.sparse", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(
+        0, "simg2img %s.sparse %s", rootfs_path.c_str(), rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.c_str());
+
+    EXPECT_COMMAND(
+        0, "mv %s.zht %s.zht.sparse", rootfs_path.c_str(), rootfs_path.c_str());
     EXPECT_COMMAND(0,
-                   "mv %s %s.sparse",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0,
-                   "simg2img %s.sparse %s",
-                   rootfs_path.value().c_str(),
-                   rootfs_path.value().c_str());
-    EXPECT_COMMAND(0, "rm -f %s.sparse", rootfs_path.value().c_str());
+                   "simg2img %s.zht.sparse %s.zht",
+                   rootfs_path.c_str(),
+                   rootfs_path.c_str());
+    EXPECT_COMMAND(0, "rm -f %s.zht.sparse", rootfs_path.c_str());
   }
 
   /* TODO: would be nice to verify that the FEC data is correct. */
 
   // Now check that we can find the VBMeta block again from the footer.
   std::string part_data;
-  ASSERT_TRUE(base::ReadFileToString(rootfs_path, &part_data));
+  ASSERT_TRUE(
+      android::base::ReadFileToString(rootfs_path.string(), &part_data));
+
+  // Also read the zeroed hash-tree version.
+  std::string zht_part_data;
+  ASSERT_TRUE(base::ReadFileToString(
+      base::FilePath(rootfs_path.string() + ".zht"), &zht_part_data));
 
   // Check footer contains correct data.
   AvbFooter f;
@@ -1296,27 +1471,57 @@ void AvbToolTest::AddHashtreeFooterFECTest(bool sparse_image) {
   EXPECT_EQ("e811611467dcd6e8dc4324e45f706c2bdd51db67",
             mem_to_hexstring(desc_end + o, d.root_digest_len));
 
+  // Check that the zeroed hashtree version differ only by the hashtree + fec
+  // being zeroed out.
+  EXPECT_EQ(part_data.size(), zht_part_data.size());
+  size_t zht_ht_begin = d.tree_offset;
+  size_t zht_ht_end = zht_ht_begin + d.tree_size;
+  size_t zht_fec_begin = zht_ht_end;
+  size_t zht_fec_end = zht_fec_begin + d.fec_size;
+  EXPECT_EQ(0, memcmp(part_data.data(), zht_part_data.data(), zht_ht_begin));
+  EXPECT_NE(0,
+            memcmp(part_data.data() + zht_ht_begin,
+                   zht_part_data.data() + zht_ht_begin,
+                   zht_fec_end - zht_ht_begin));
+  EXPECT_EQ(0,
+            memcmp(part_data.data() + zht_fec_end,
+                   zht_part_data.data() + zht_fec_end,
+                   zht_part_data.size() - zht_fec_end));
+  EXPECT_EQ(0, strncmp(zht_part_data.data() + zht_ht_begin, "ZeRoHaSH", 8));
+  for (size_t n = zht_ht_begin + 8; n < zht_ht_end; n++) {
+    EXPECT_EQ(0, zht_part_data.data()[n]);
+  }
+  if (d.fec_size > 0) {
+    EXPECT_EQ(0, strncmp(zht_part_data.data() + zht_fec_begin, "ZeRoHaSH", 8));
+    for (size_t n = zht_fec_begin + 8; n < zht_fec_end; n++) {
+      EXPECT_EQ(0, zht_part_data.data()[n]);
+    }
+  }
+
   // Check that we correctly generate dm-verity kernel cmdline
   // snippets, if requested.
-  base::FilePath vbmeta_dmv_path = testdir_.Append("vbmeta_dm_verity_desc.bin");
+  std::filesystem::path vbmeta_dmv_path =
+      testdir_ / "vbmeta_dm_verity_desc.bin";
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--setup_rootfs_from_kernel %s "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\"",
-                 vbmeta_dmv_path.value().c_str(),
-                 rootfs_path.value().c_str());
+                 vbmeta_dmv_path.c_str(),
+                 rootfs_path.c_str());
 
   ASSERT_EQ(
       "Minimum libavb version:   1.0\n"
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          960 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Kernel Cmdline descriptor:\n"
@@ -1332,16 +1537,17 @@ void AvbToolTest::AddHashtreeFooterFECTest(bool sparse_image) {
       "      Flags:                 2\n"
       "      Kernel Cmdline:        "
       "'root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)'\n",
-      InfoImage(vbmeta_dmv_path));
+      InfoImage(vbmeta_dmv_path.string()));
 
   // Check that the footer is correctly erased and the hashtree and
   // FEC data remains. The constant 1085440 is used because it's where
   // the FEC data ends (it's at offset 1069056 and size 16384).
   EXPECT_COMMAND(0,
-                 "./avbtool erase_footer --image %s --keep_hashtree",
-                 rootfs_path.value().c_str());
+                 "./avbtool.py erase_footer --image %s --keep_hashtree",
+                 rootfs_path.c_str());
   int64_t erased_footer_file_size;
-  ASSERT_TRUE(base::GetFileSize(rootfs_path, &erased_footer_file_size));
+  ASSERT_TRUE(base::GetFileSize(base::FilePath(rootfs_path.c_str()),
+                                &erased_footer_file_size));
   EXPECT_EQ(static_cast<size_t>(erased_footer_file_size), 1085440UL);
 }
 
@@ -1355,16 +1561,17 @@ TEST_F(AvbToolTest, AddHashtreeFooterFECSparse) {
 
 TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSize) {
   const size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath output_path = testdir_.Append("max_size.txt");
+  std::filesystem::path output_path = testdir_ / "max_size.txt";
 
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer "
+                 "./avbtool.py add_hashtree_footer "
                  "--partition_size %zd --calc_max_image_size "
                  "--do_not_generate_fec > %s",
                  partition_size,
-                 output_path.value().c_str());
+                 output_path.c_str());
   std::string max_image_size_data;
-  EXPECT_TRUE(base::ReadFileToString(output_path, &max_image_size_data));
+  EXPECT_TRUE(android::base::ReadFileToString(output_path.string(),
+                                              &max_image_size_data));
   EXPECT_EQ("10330112\n", max_image_size_data);
   size_t max_image_size = atoll(max_image_size_data.c_str());
 
@@ -1374,9 +1581,9 @@ TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSize) {
 
   // Check that we can add a hashtree with an image this size for such
   // a partition size.
-  base::FilePath system_path = GenerateImage("system", max_image_size);
+  std::string system_path = GenerateImage("system", max_image_size);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer"
+                 "./avbtool.py add_hashtree_footer"
                  " --image %s"
                  " --partition_name system"
                  " --partition_size %zd"
@@ -1385,21 +1592,22 @@ TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSize) {
                  " --key test/data/testkey_rsa4096.pem"
                  " --internal_release_string \"\" "
                  "--do_not_generate_fec",
-                 system_path.value().c_str(),
+                 system_path.c_str(),
                  partition_size);
 }
 
 TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSizeWithFEC) {
   const size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath output_path = testdir_.Append("max_size.txt");
+  std::filesystem::path output_path = testdir_ / "max_size.txt";
 
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer "
+                 "./avbtool.py add_hashtree_footer "
                  "--partition_size %zd --calc_max_image_size > %s",
                  partition_size,
-                 output_path.value().c_str());
+                 output_path.c_str());
   std::string max_image_size_data;
-  EXPECT_TRUE(base::ReadFileToString(output_path, &max_image_size_data));
+  EXPECT_TRUE(android::base::ReadFileToString(output_path.string(),
+                                              &max_image_size_data));
   EXPECT_EQ("10235904\n", max_image_size_data);
   size_t max_image_size = atoll(max_image_size_data.c_str());
 
@@ -1409,9 +1617,9 @@ TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSizeWithFEC) {
 
   // Check that we can add a hashtree with an image this size for such
   // a partition size.
-  base::FilePath system_path = GenerateImage("system", max_image_size);
+  std::string system_path = GenerateImage("system", max_image_size);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer"
+                 "./avbtool.py add_hashtree_footer"
                  " --image %s"
                  " --partition_name system"
                  " --partition_size %zd"
@@ -1419,22 +1627,93 @@ TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSizeWithFEC) {
                  " --algorithm SHA512_RSA4096 "
                  " --key test/data/testkey_rsa4096.pem"
                  " --internal_release_string \"\"",
-                 system_path.value().c_str(),
+                 system_path.c_str(),
                  partition_size);
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterCalcMaxImageSizeWithNoHashtree) {
+  const size_t partition_size = 10 * 1024 * 1024;
+  std::filesystem::path output_path = testdir_ / "max_size.txt";
+
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer "
+                 "--no_hashtree "
+                 "--partition_size %zd --calc_max_image_size > %s",
+                 partition_size,
+                 output_path.c_str());
+  std::string max_image_size_data;
+  EXPECT_TRUE(android::base::ReadFileToString(output_path.string(),
+                                              &max_image_size_data));
+  EXPECT_EQ("10416128\n", max_image_size_data);
+  size_t max_image_size = atoll(max_image_size_data.c_str());
+
+  // vbmeta(64) + footer(4) takes up 68 KiB
+  EXPECT_EQ(68 * 1024ULL, partition_size - max_image_size);
+
+  // Check that we can add a hashtree with an image this size for such
+  // a partition size.
+  std::string system_path = GenerateImage("system", max_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer"
+                 " --image %s"
+                 " --no_hashtree"
+                 " --partition_name system"
+                 " --partition_size %zd"
+                 " --salt deadbeef"
+                 " --algorithm SHA512_RSA4096 "
+                 " --key test/data/testkey_rsa4096.pem"
+                 " --internal_release_string \"\"",
+                 system_path.c_str(),
+                 partition_size);
+  // with --no_hashtree, Tree/FEC sizes are 0 bytes
+  ASSERT_EQ(
+      "Footer version:           1.0\n"
+      "Image size:               10485760 bytes\n"
+      "Original image size:      10416128 bytes\n"
+      "VBMeta offset:            10416128\n"
+      "VBMeta size:              2112 bytes\n"
+      "--\n"
+      "Minimum libavb version:   1.0\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     576 bytes\n"
+      "Auxiliary Block:          1280 bytes\n"
+      "Public key (sha1):        2597c218aae470a130f61162feaae70afd97f011\n"
+      "Algorithm:                SHA512_RSA4096\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            10416128 bytes\n"
+      "      Tree Offset:           10416128\n"
+      "      Tree Size:             0 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         2\n"
+      "      FEC offset:            10416128\n"
+      "      FEC size:              0 bytes\n"
+      "      Hash Algorithm:        sha1\n"
+      "      Partition Name:        system\n"
+      "      Salt:                  deadbeef\n"
+      "      Root Digest:           4215bd42bcc99636f42956ce3d2c7884d6a8093b\n"
+      "      Flags:                 0\n",
+      InfoImage(system_path));
 }
 
 TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigest) {
   size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", partition_size / 2);
+  std::string path = GenerateImage("digest_location", partition_size / 2);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer --salt d00df00d "
+                 "./avbtool.py add_hashtree_footer "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--use_persistent_digest",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are two important bits here specific to --use_persistent_digest:
   //   Minimum libavb version = 1.1
@@ -1450,9 +1729,11 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigest) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hashtree descriptor:\n"
@@ -1467,7 +1748,7 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigest) {
       "      FEC size:              49152 bytes\n"
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        foobar\n"
-      "      Salt:                  d00df00d\n"
+      "      Salt:                  \n"
       "      Root Digest:           \n"
       "      Flags:                 0\n",
       InfoImage(path));
@@ -1475,16 +1756,16 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigest) {
 
 TEST_F(AvbToolTest, AddHashtreeFooterWithNoAB) {
   size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", partition_size / 2);
+  std::string path = GenerateImage("digest_location", partition_size / 2);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer --salt d00df00d "
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--do_not_use_ab",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are two important bits here we're expecting with --do_not_use_ab:
   //   Minimum libavb version = 1.1
@@ -1500,9 +1781,11 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithNoAB) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hashtree descriptor:\n"
@@ -1526,16 +1809,16 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithNoAB) {
 
 TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigestAndNoAB) {
   size_t partition_size = 10 * 1024 * 1024;
-  base::FilePath path = GenerateImage("digest_location", partition_size / 2);
+  std::string path = GenerateImage("digest_location", partition_size / 2);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer --salt d00df00d "
+                 "./avbtool.py add_hashtree_footer "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %d --partition_name foobar "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\" "
                  "--use_persistent_digest --do_not_use_ab",
-                 path.value().c_str(),
+                 path.c_str(),
                  (int)partition_size);
   // There are three important bits specific to these flags:
   //   Minimum libavb version = 1.1
@@ -1552,9 +1835,231 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigestAndNoAB) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            5242880 bytes\n"
+      "      Tree Offset:           5242880\n"
+      "      Tree Size:             45056 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         2\n"
+      "      FEC offset:            5287936\n"
+      "      FEC size:              49152 bytes\n"
+      "      Hash Algorithm:        sha256\n"
+      "      Partition Name:        foobar\n"
+      "      Salt:                  \n"
+      "      Root Digest:           \n"
+      "      Flags:                 1\n",
+      InfoImage(path));
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterNoSizeOrName) {
+  // Size must be a multiple of block size (4096 bytes)
+  size_t file_size = 72 * 1024;
+  std::string path = GenerateImage("data.bin", file_size);
+
+  // Note how there is no --partition_size or --partition_name here.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--image %s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\" ",
+                 path.c_str());
+
+  ASSERT_EQ(
+      "Footer version:           1.0\n"
+      "Image size:               94208 bytes\n"
+      "Original image size:      73728 bytes\n"
+      "VBMeta offset:            86016\n"
+      "VBMeta size:              1344 bytes\n"
+      "--\n"
+      "Minimum libavb version:   1.0\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            73728 bytes\n"
+      "      Tree Offset:           73728\n"
+      "      Tree Size:             4096 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         2\n"
+      "      FEC offset:            77824\n"
+      "      FEC size:              8192 bytes\n"
+      "      Hash Algorithm:        sha1\n"
+      "      Partition Name:        \n"
+      "      Salt:                  d00df00d\n"
+      "      Root Digest:           2f73fb340e982794643e1121d82d5195677c2b31\n"
+      "      Flags:                 0\n",
+      InfoImage(path));
+
+  // Check that at least avbtool can verify the image and hashtree.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py verify_image "
+                 "--image %s ",
+                 path.c_str());
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterSingleBlock) {
+  // Tests a special case that the file size is just one block.
+  size_t file_size = 4096;
+  std::string path = GenerateImage("data.bin", file_size);
+
+  // Note how there is no --partition_size or --partition_name here.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--image %s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\" ",
+                 path.c_str());
+
+  ASSERT_EQ(
+      "Footer version:           1.0\n"
+      "Image size:               20480 bytes\n"
+      "Original image size:      4096 bytes\n"
+      "VBMeta offset:            12288\n"
+      "VBMeta size:              1344 bytes\n"
+      "--\n"
+      "Minimum libavb version:   1.0\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            4096 bytes\n"
+      "      Tree Offset:           4096\n"
+      "      Tree Size:             0 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         2\n"
+      "      FEC offset:            4096\n"
+      "      FEC size:              8192 bytes\n"
+      "      Hash Algorithm:        sha1\n"
+      "      Partition Name:        \n"
+      "      Salt:                  d00df00d\n"
+      "      Root Digest:           4bd1e1f0aa1c2c793bb9f3e52de6ae7393889e61\n"
+      "      Flags:                 0\n",
+      InfoImage(path));
+
+  // Check that at least avbtool can verify the image and hashtree.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py verify_image "
+                 "--image %s ",
+                 path.c_str());
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterNoSizeWrongSize) {
+  // Size must be a multiple of block size (4096 bytes) and this one isn't...
+  size_t file_size = 70 * 1024;
+  std::string path = GenerateImage("data.bin", file_size);
+
+  // ... so we expect this command to fail.
+  EXPECT_COMMAND(1,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--image %s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\" ",
+                 path.c_str());
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterRoundImageSize) {
+  // Image size needs not to be a multiple of block size (4096 bytes) if
+  // --partition_size is specified. avbtool will round the image size being
+  // a multiple of block size, prior to add an AVB footer.
+  size_t image_size = 70 * 1024;
+  std::string path = GenerateImage("data.bin", image_size);
+
+  size_t partition_size = 10 * 1024 * 1024;
+  // Note that there is --partition_size here.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--image %s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--partition_size %d --partition_name foobar "
+                 "--internal_release_string \"\" ",
+                 path.c_str(),
+                 (int)partition_size);
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterNoWrongPartitionSize) {
+  // Partition size must be a multiple of block size (4096 bytes) and this
+  // one isn't...
+  size_t partition_size = 10 * 1024 * 1024 + 1024;
+
+  // Image size doesn't matter in this case.
+  size_t image_size = 70 * 1024;
+  std::string path = GenerateImage("data.bin", image_size);
+
+  // ... so we expect this command to fail.
+  EXPECT_COMMAND(1,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--image %s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--partition_size %d --partition_name foobar "
+                 "--internal_release_string \"\" ",
+                 path.c_str(),
+                 (int)partition_size);
+}
+
+TEST_F(AvbToolTest, AddHashtreeFooterWithCheckAtMostOnce) {
+  size_t partition_size = 10 * 1024 * 1024;
+  std::string path = GenerateImage("digest_location", partition_size / 2);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d "
+                 "--hash_algorithm sha256 --image %s "
+                 "--partition_size %d --partition_name foobar "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\" "
+                 "--check_at_most_once",
+                 path.c_str(),
+                 (int)partition_size);
+  // There are two important bits here we're expecting with --check_at_most_once:
+  //   Minimum libavb version = 1.1
+  //   Hashtree descriptor -> Flags = 2
+  ASSERT_EQ(
+      "Footer version:           1.0\n"
+      "Image size:               10485760 bytes\n"
+      "Original image size:      5242880 bytes\n"
+      "VBMeta offset:            5337088\n"
+      "VBMeta size:              1344 bytes\n"
+      "--\n"
+      "Minimum libavb version:   1.1\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          768 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Hashtree descriptor:\n"
@@ -1570,33 +2075,36 @@ TEST_F(AvbToolTest, AddHashtreeFooterWithPersistentDigestAndNoAB) {
       "      Hash Algorithm:        sha256\n"
       "      Partition Name:        foobar\n"
       "      Salt:                  d00df00d\n"
-      "      Root Digest:           \n"
-      "      Flags:                 1\n",
+      "      Root Digest:           "
+      "d0e31526f5a3f8e3f59acf726bd31ae7861ee78f9baa9195356bf479c6f9119d\n"
+      "      Flags:                 2\n",
       InfoImage(path));
 }
 
 TEST_F(AvbToolTest, KernelCmdlineDescriptor) {
-  base::FilePath vbmeta_path =
-      testdir_.Append("vbmeta_kernel_cmdline_desc.bin");
+  std::filesystem::path vbmeta_path =
+      testdir_ / "vbmeta_kernel_cmdline_desc.bin";
 
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--kernel_cmdline 'foo bar baz' "
                  "--kernel_cmdline 'second cmdline' "
                  "--algorithm SHA256_RSA2048 "
                  "--key test/data/testkey_rsa2048.pem "
                  "--internal_release_string \"\"",
-                 vbmeta_path.value().c_str());
+                 vbmeta_path.c_str());
 
   ASSERT_EQ(
       "Minimum libavb version:   1.0\n"
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          640 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Kernel Cmdline descriptor:\n"
@@ -1605,11 +2113,12 @@ TEST_F(AvbToolTest, KernelCmdlineDescriptor) {
       "    Kernel Cmdline descriptor:\n"
       "      Flags:                 0\n"
       "      Kernel Cmdline:        'second cmdline'\n",
-      InfoImage(vbmeta_path));
+      InfoImage(vbmeta_path.string()));
 
   // Now check the VBMeta image.
   std::string image_data;
-  ASSERT_TRUE(base::ReadFileToString(vbmeta_path, &image_data));
+  ASSERT_TRUE(
+      android::base::ReadFileToString(vbmeta_path.string(), &image_data));
 
   const uint8_t* vbmeta_data =
       reinterpret_cast<const uint8_t*>(image_data.data());
@@ -1649,6 +2158,183 @@ TEST_F(AvbToolTest, KernelCmdlineDescriptor) {
                         d.kernel_cmdline_length));
 }
 
+TEST_F(AvbToolTest, CalculateKernelCmdline) {
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
+  EXPECT_COMMAND(0,
+                 "./avbtool.py make_vbmeta_image "
+                 "--output %s "
+                 "--kernel_cmdline 'foo bar baz' "
+                 "--kernel_cmdline 'second cmdline' "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\"",
+                 vbmeta_path.c_str());
+
+  std::filesystem::path out_path = testdir_ / "out.txt";
+  std::string out;
+  EXPECT_COMMAND(0,
+                 "./avbtool.py calculate_kernel_cmdline --image %s > %s",
+                 vbmeta_path.c_str(),
+                 out_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(out, "foo bar baz second cmdline");
+}
+
+TEST_F(AvbToolTest, CalculateKernelCmdlineChainedAndWithFlags) {
+  const size_t rootfs_size = 1028 * 1024;
+  const size_t partition_size = 1536 * 1024;
+
+  std::filesystem::path pk_path = testdir_ / "testkey_rsa2048.avbpubkey";
+
+  // Generate a 1028 KiB file with known content, add a hashtree, and cmdline
+  // descriptors for setting up this hashtree. Notably this will create *two*
+  // cmdline descriptors so we can test calculate_kernel_cmdline's
+  // --hashtree_disabled option.
+  std::vector<uint8_t> rootfs;
+  rootfs.resize(rootfs_size);
+  for (size_t n = 0; n < rootfs_size; n++)
+    rootfs[n] = uint8_t(n);
+  std::filesystem::path rootfs_path = testdir_ / "rootfs.bin";
+  EXPECT_EQ(rootfs_size,
+            static_cast<const size_t>(
+                base::WriteFile(base::FilePath(rootfs_path.c_str()),
+                                reinterpret_cast<const char*>(rootfs.data()),
+                                rootfs.size())));
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa2048.pem"
+      " --output %s",
+      pk_path.c_str());
+
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %d --partition_name rootfs "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\" "
+                 "--setup_as_rootfs_from_kernel",
+                 rootfs_path.c_str(),
+                 (int)partition_size);
+  EXPECT_EQ(
+      "Footer version:           1.0\n"
+      "Image size:               1572864 bytes\n"
+      "Original image size:      1052672 bytes\n"
+      "VBMeta offset:            1085440\n"
+      "VBMeta size:              1792 bytes\n"
+      "--\n"
+      "Minimum libavb version:   1.0\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          1216 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Hashtree descriptor:\n"
+      "      Version of dm-verity:  1\n"
+      "      Image Size:            1052672 bytes\n"
+      "      Tree Offset:           1052672\n"
+      "      Tree Size:             16384 bytes\n"
+      "      Data Block Size:       4096 bytes\n"
+      "      Hash Block Size:       4096 bytes\n"
+      "      FEC num roots:         2\n"
+      "      FEC offset:            1069056\n"
+      "      FEC size:              16384 bytes\n"
+      "      Hash Algorithm:        sha1\n"
+      "      Partition Name:        rootfs\n"
+      "      Salt:                  d00df00d\n"
+      "      Root Digest:           e811611467dcd6e8dc4324e45f706c2bdd51db67\n"
+      "      Flags:                 0\n"
+      "    Kernel Cmdline descriptor:\n"
+      "      Flags:                 1\n"
+      "      Kernel Cmdline:        'dm=\"1 vroot none ro 1,0 2056 verity 1 "
+      "PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) "
+      "4096 4096 257 257 sha1 e811611467dcd6e8dc4324e45f706c2bdd51db67 "
+      "d00df00d 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks "
+      "use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 "
+      "fec_blocks 261 fec_start 261\" root=/dev/dm-0'\n"
+      "    Kernel Cmdline descriptor:\n"
+      "      Flags:                 2\n"
+      "      Kernel Cmdline:        "
+      "'root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID)'\n",
+      InfoImage(rootfs_path.string()));
+
+  // Chain to the rootfs.img and include two cmdline descriptors.
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
+  EXPECT_COMMAND(0,
+                 "./avbtool.py make_vbmeta_image "
+                 "--output %s "
+                 "--kernel_cmdline 'foo bar baz' "
+                 "--kernel_cmdline 'second cmdline' "
+                 "--chain_partition rootfs:1:%s "
+                 "--algorithm SHA256_RSA2048 "
+                 "--key test/data/testkey_rsa2048.pem "
+                 "--internal_release_string \"\"",
+                 vbmeta_path.c_str(),
+                 pk_path.c_str());
+  EXPECT_EQ(
+      "Minimum libavb version:   1.0\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          1280 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Chain Partition descriptor:\n"
+      "      Partition Name:          rootfs\n"
+      "      Rollback Index Location: 1\n"
+      "      Public key (sha1):       "
+      "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "      Flags:                   0\n"
+      "    Kernel Cmdline descriptor:\n"
+      "      Flags:                 0\n"
+      "      Kernel Cmdline:        'foo bar baz'\n"
+      "    Kernel Cmdline descriptor:\n"
+      "      Flags:                 0\n"
+      "      Kernel Cmdline:        'second cmdline'\n",
+      InfoImage(vbmeta_path.string()));
+
+  std::filesystem::path out_path = testdir_ / "out.txt";
+  std::string out;
+
+  // First check the kernel cmdline without --hashtree_disabled - compare with
+  // above info_image output.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py calculate_kernel_cmdline --image %s > %s",
+                 vbmeta_path.c_str(),
+                 out_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(
+      "dm=\"1 vroot none ro 1,0 2056 verity 1 "
+      "PARTUUID=$(ANDROID_SYSTEM_PARTUUID) PARTUUID=$(ANDROID_SYSTEM_PARTUUID) "
+      "4096 4096 257 257 sha1 e811611467dcd6e8dc4324e45f706c2bdd51db67 "
+      "d00df00d 10 $(ANDROID_VERITY_MODE) ignore_zero_blocks "
+      "use_fec_from_device PARTUUID=$(ANDROID_SYSTEM_PARTUUID) fec_roots 2 "
+      "fec_blocks 261 fec_start 261\" root=/dev/dm-0 foo bar baz second "
+      "cmdline",
+      out);
+
+  // Then check the kernel cmdline with --hashtree_disabled - compare with above
+  // info_image output.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py calculate_kernel_cmdline --image %s "
+                 "--hashtree_disabled > %s",
+                 vbmeta_path.c_str(),
+                 out_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(
+      "root=PARTUUID=$(ANDROID_SYSTEM_PARTUUID) foo bar baz second cmdline",
+      out);
+}
+
 TEST_F(AvbToolTest, AddHashFooterSmallImageWithExternalVbmeta) {
   const size_t image_size = 37;
   const size_t partition_size = 20 * 4096;
@@ -1658,15 +2344,15 @@ TEST_F(AvbToolTest, AddHashFooterSmallImageWithExternalVbmeta) {
     image[n] = uint8_t(n);
   }
 
-  base::FilePath ext_vbmeta_path = testdir_.Append("ext_vbmeta.bin");
-  base::FilePath image_path = testdir_.Append("kernel.bin");
+  std::filesystem::path ext_vbmeta_path = testdir_ / "ext_vbmeta.bin";
+  std::filesystem::path image_path = testdir_ / "kernel.bin";
   EXPECT_EQ(image_size,
             static_cast<const size_t>(
-                base::WriteFile(image_path,
+                base::WriteFile(base::FilePath(image_path.c_str()),
                                 reinterpret_cast<const char*>(image.data()),
                                 image.size())));
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer --salt d00df00d "
+                 "./avbtool.py add_hash_footer --salt d00df00d "
                  "--hash_algorithm sha256 --image %s "
                  "--partition_size %zu --partition_name kernel "
                  "--algorithm SHA256_RSA2048 "
@@ -1674,48 +2360,49 @@ TEST_F(AvbToolTest, AddHashFooterSmallImageWithExternalVbmeta) {
                  "--output_vbmeta %s "
                  "--do_not_append_vbmeta_image "
                  "--internal_release_string \"\"",
-                 image_path.value().c_str(),
+                 image_path.c_str(),
                  partition_size,
-                 ext_vbmeta_path.value().c_str());
+                 ext_vbmeta_path.c_str());
 
   // It is not this unit test's job to check the vbmeta content.
 
   int64_t file_size;
-  ASSERT_TRUE(base::GetFileSize(image_path, &file_size));
+  ASSERT_TRUE(
+      base::GetFileSize(base::FilePath(image_path.c_str()), &file_size));
   EXPECT_EQ(static_cast<size_t>(file_size), image_size);
 }
 
 TEST_F(AvbToolTest, IncludeDescriptor) {
-  base::FilePath vbmeta1_path = testdir_.Append("vbmeta_id1.bin");
-  base::FilePath vbmeta2_path = testdir_.Append("vbmeta_id2.bin");
-  base::FilePath vbmeta3_path = testdir_.Append("vbmeta_id3.bin");
+  std::filesystem::path vbmeta1_path = testdir_ / "vbmeta_id1.bin";
+  std::filesystem::path vbmeta2_path = testdir_ / "vbmeta_id2.bin";
+  std::filesystem::path vbmeta3_path = testdir_ / "vbmeta_id3.bin";
 
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--kernel_cmdline 'something' "
                  "--prop name:value "
                  "--internal_release_string \"\"",
-                 vbmeta1_path.value().c_str());
+                 vbmeta1_path.c_str());
 
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--prop name2:value2 "
                  "--prop name3:value3 "
                  "--internal_release_string \"\"",
-                 vbmeta2_path.value().c_str());
+                 vbmeta2_path.c_str());
 
   EXPECT_COMMAND(0,
-                 "./avbtool make_vbmeta_image "
+                 "./avbtool.py make_vbmeta_image "
                  "--output %s "
                  "--prop name4:value4 "
                  "--include_descriptors_from_image %s "
                  "--include_descriptors_from_image %s "
                  "--internal_release_string \"\"",
-                 vbmeta3_path.value().c_str(),
-                 vbmeta1_path.value().c_str(),
-                 vbmeta2_path.value().c_str());
+                 vbmeta3_path.c_str(),
+                 vbmeta1_path.c_str(),
+                 vbmeta2_path.c_str());
 
   ASSERT_EQ(
       "Minimum libavb version:   1.0\n"
@@ -1725,6 +2412,7 @@ TEST_F(AvbToolTest, IncludeDescriptor) {
       "Algorithm:                NONE\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Prop: name4 -> 'value4'\n"
@@ -1734,50 +2422,54 @@ TEST_F(AvbToolTest, IncludeDescriptor) {
       "      Kernel Cmdline:        'something'\n"
       "    Prop: name2 -> 'value2'\n"
       "    Prop: name3 -> 'value3'\n",
-      InfoImage(vbmeta3_path));
+      InfoImage(vbmeta3_path.string()));
 }
 
 TEST_F(AvbToolTest, ChainedPartition) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta_cp.bin");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta_cp.bin";
 
-  base::FilePath pk_path = testdir_.Append("testkey_rsa2048.avbpubkey");
+  std::filesystem::path pk_path = testdir_ / "testkey_rsa2048.avbpubkey";
 
   EXPECT_COMMAND(
       0,
-      "./avbtool extract_public_key --key test/data/testkey_rsa2048.pem"
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa2048.pem"
       " --output %s",
-      pk_path.value().c_str());
+      pk_path.c_str());
 
   EXPECT_COMMAND(
       0,
-      "./avbtool make_vbmeta_image "
+      "./avbtool.py make_vbmeta_image "
       "--output %s "
       "--chain_partition system:1:%s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--internal_release_string \"\"",
-      vbmeta_path.value().c_str(),
-      pk_path.value().c_str());
+      vbmeta_path.c_str(),
+      pk_path.c_str());
 
   ASSERT_EQ(
       "Minimum libavb version:   1.0\n"
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          1152 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
       "Release String:           ''\n"
       "Descriptors:\n"
       "    Chain Partition descriptor:\n"
       "      Partition Name:          system\n"
       "      Rollback Index Location: 1\n"
       "      Public key (sha1):       "
-      "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n",
-      InfoImage(vbmeta_path));
+      "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "      Flags:                   0\n",
+      InfoImage(vbmeta_path.string()));
 
   // Now check the VBMeta image.
   std::string image_data;
-  ASSERT_TRUE(base::ReadFileToString(vbmeta_path, &image_data));
+  ASSERT_TRUE(
+      android::base::ReadFileToString(vbmeta_path.string(), &image_data));
 
   const uint8_t* vbmeta_data =
       reinterpret_cast<const uint8_t*>(image_data.data());
@@ -1794,7 +2486,91 @@ TEST_F(AvbToolTest, ChainedPartition) {
   EXPECT_EQ(1UL, descriptors.size());
 
   std::string pk_data;
-  ASSERT_TRUE(base::ReadFileToString(pk_path, &pk_data));
+  ASSERT_TRUE(android::base::ReadFileToString(pk_path.string(), &pk_data));
+
+  AvbChainPartitionDescriptor d;
+  EXPECT_EQ(AVB_DESCRIPTOR_TAG_CHAIN_PARTITION,
+            avb_be64toh(descriptors[0]->tag));
+  EXPECT_NE(
+      0,
+      avb_chain_partition_descriptor_validate_and_byteswap(
+          reinterpret_cast<const AvbChainPartitionDescriptor*>(descriptors[0]),
+          &d));
+  const uint8_t* desc_end = reinterpret_cast<const uint8_t*>(descriptors[0]) +
+                            sizeof(AvbChainPartitionDescriptor);
+  uint64_t o = 0;
+  EXPECT_EQ("system",
+            std::string(reinterpret_cast<const char*>(desc_end + o),
+                        d.partition_name_len));
+  o += d.partition_name_len;
+  EXPECT_EQ(pk_data,
+            std::string(reinterpret_cast<const char*>(descriptors[0]) +
+                            sizeof(AvbChainPartitionDescriptor) + o,
+                        d.public_key_len));
+}
+
+TEST_F(AvbToolTest, ChainedPartitionNoAB) {
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta_cp.bin";
+
+  std::filesystem::path pk_path = testdir_ / "testkey_rsa2048.avbpubkey";
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa2048.pem"
+      " --output %s",
+      pk_path.c_str());
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py make_vbmeta_image "
+      "--output %s "
+      "--chain_partition_do_not_use_ab system:1:%s "
+      "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
+      "--internal_release_string \"\"",
+      vbmeta_path.c_str(),
+      pk_path.c_str());
+
+  ASSERT_EQ(
+      "Minimum libavb version:   1.3\n"
+      "Header Block:             256 bytes\n"
+      "Authentication Block:     320 bytes\n"
+      "Auxiliary Block:          1152 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "Algorithm:                SHA256_RSA2048\n"
+      "Rollback Index:           0\n"
+      "Flags:                    0\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           ''\n"
+      "Descriptors:\n"
+      "    Chain Partition descriptor:\n"
+      "      Partition Name:          system\n"
+      "      Rollback Index Location: 1\n"
+      "      Public key (sha1):       "
+      "cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
+      "      Flags:                   1\n",
+      InfoImage(vbmeta_path.string()));
+
+  // Now check the VBMeta image.
+  std::string image_data;
+  ASSERT_TRUE(
+      android::base::ReadFileToString(vbmeta_path.string(), &image_data));
+
+  const uint8_t* vbmeta_data =
+      reinterpret_cast<const uint8_t*>(image_data.data());
+  const size_t vbmeta_size = image_data.length();
+  EXPECT_EQ(AVB_VBMETA_VERIFY_RESULT_OK,
+            avb_vbmeta_image_verify(vbmeta_data, vbmeta_size, NULL, NULL));
+
+  // Collect all descriptors.
+  std::vector<const AvbDescriptor*> descriptors;
+  avb_descriptor_foreach(
+      vbmeta_data, vbmeta_size, collect_descriptors, &descriptors);
+
+  // We should have one descriptor - check it.
+  EXPECT_EQ(1UL, descriptors.size());
+
+  std::string pk_data;
+  ASSERT_TRUE(android::base::ReadFileToString(pk_path.string(), &pk_data));
 
   AvbChainPartitionDescriptor d;
   EXPECT_EQ(AVB_DESCRIPTOR_TAG_CHAIN_PARTITION,
@@ -1818,53 +2594,53 @@ TEST_F(AvbToolTest, ChainedPartition) {
 }
 
 TEST_F(AvbToolTest, ChainedPartitionNoLocationCollision) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta_cp.bin");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta_cp.bin";
 
-  base::FilePath pk_path = testdir_.Append("testkey_rsa2048.avbpubkey");
+  std::filesystem::path pk_path = testdir_ / "testkey_rsa2048.avbpubkey";
 
   EXPECT_COMMAND(
       0,
-      "./avbtool extract_public_key --key test/data/testkey_rsa2048.pem"
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa2048.pem"
       " --output %s",
-      pk_path.value().c_str());
+      pk_path.c_str());
 
   // Check that avbtool bails if the same Rollback Index Location is
   // used for multiple chained partitions.
   EXPECT_COMMAND(
       1,
-      "./avbtool make_vbmeta_image "
+      "./avbtool.py make_vbmeta_image "
       "--output %s "
       "--chain_partition system:1:%s "
       "--chain_partition other:1:%s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--internal_release_string \"\"",
-      vbmeta_path.value().c_str(),
-      pk_path.value().c_str(),
-      pk_path.value().c_str());
+      vbmeta_path.c_str(),
+      pk_path.c_str(),
+      pk_path.c_str());
 }
 
 TEST_F(AvbToolTest, AppendVBMetaImage) {
   size_t boot_size = 5 * 1024 * 1024;
   size_t boot_partition_size = 32 * 1024 * 1024;
-  base::FilePath boot_path = GenerateImage("boot", boot_size);
+  std::string boot_path = GenerateImage("boot", boot_size);
 
   GenerateVBMetaImage("vbmeta.img",
                       "SHA256_RSA2048",
                       0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
+                      "test/data/testkey_rsa2048.pem",
                       std::string("--append_to_release_string \"\" "
                                   "--kernel_cmdline foo"));
 
   EXPECT_COMMAND(0,
-                 "./avbtool append_vbmeta_image "
+                 "./avbtool.py append_vbmeta_image "
                  "--image %s "
                  "--partition_size %d "
                  "--vbmeta_image %s ",
-                 boot_path.value().c_str(),
+                 boot_path.c_str(),
                  (int)boot_partition_size,
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 
-  std::string vbmeta_contents = InfoImage(vbmeta_image_path_);
+  std::string vbmeta_contents = InfoImage(vbmeta_image_path_.string());
   std::string boot_contents = InfoImage(boot_path);
 
   // Check that boot.img has the same vbmeta blob as from vbmeta.img -
@@ -1876,10 +2652,12 @@ TEST_F(AvbToolTest, AppendVBMetaImage) {
       "Header Block:             256 bytes\n"
       "Authentication Block:     320 bytes\n"
       "Auxiliary Block:          576 bytes\n"
+      "Public key (sha1):        cdbb77177f731920bbe0a0f94f84d9038ae0617d\n"
       "Algorithm:                SHA256_RSA2048\n"
       "Rollback Index:           0\n"
       "Flags:                    0\n"
-      "Release String:           'avbtool 1.1.0 '\n"
+      "Rollback Index Location:  0\n"
+      "Release String:           'avbtool 1.3.0 '\n"
       "Descriptors:\n"
       "    Kernel Cmdline descriptor:\n"
       "      Flags:                 0\n"
@@ -1895,8 +2673,8 @@ TEST_F(AvbToolTest, AppendVBMetaImage) {
   ASSERT_EQ(known_footer + vbmeta_contents, boot_contents);
 
   // Also verify that the blobs are the same, bit for bit.
-  base::File f =
-      base::File(boot_path, base::File::FLAG_OPEN | base::File::FLAG_READ);
+  base::File f = base::File(base::FilePath(boot_path),
+                            base::File::FLAG_OPEN | base::File::FLAG_READ);
   std::vector<uint8_t> loaded_vbmeta;
   loaded_vbmeta.resize(1152);
   EXPECT_EQ(
@@ -1907,100 +2685,98 @@ TEST_F(AvbToolTest, AppendVBMetaImage) {
 }
 
 TEST_F(AvbToolTest, SigningHelperBasic) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
-  base::FilePath signing_helper_test_path =
-      testdir_.Append("signing_helper_test");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
+  std::filesystem::path signing_helper_test_path =
+      testdir_ / "signing_helper_test";
   EXPECT_COMMAND(
       0,
-      "SIGNING_HELPER_TEST=\"%s\" ./avbtool make_vbmeta_image "
+      "SIGNING_HELPER_TEST=\"%s\" ./avbtool.py make_vbmeta_image "
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper test/avbtool_signing_helper_test.py "
       "--internal_release_string \"\"",
-      signing_helper_test_path.value().c_str(),
-      vbmeta_path.value().c_str());
+      signing_helper_test_path.c_str(),
+      vbmeta_path.c_str());
 
   // Now check the value in test file.
   std::string value;
-  ASSERT_TRUE(base::ReadFileToString(signing_helper_test_path, &value));
+  ASSERT_TRUE(android::base::ReadFileToString(signing_helper_test_path.string(),
+                                              &value));
   EXPECT_EQ("DONE", value);
 }
 
 TEST_F(AvbToolTest, SigningHelperWithFilesBasic) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
-  base::FilePath signing_helper_test_path =
-      testdir_.Append("signing_helper_test");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
+  std::filesystem::path signing_helper_test_path =
+      testdir_ / "signing_helper_test";
   EXPECT_COMMAND(
       0,
-      "SIGNING_HELPER_TEST=\"%s\" ./avbtool make_vbmeta_image "
+      "SIGNING_HELPER_TEST=\"%s\" ./avbtool.py make_vbmeta_image "
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper_with_files "
       "test/avbtool_signing_helper_with_files_test.py "
       "--internal_release_string \"\"",
-      signing_helper_test_path.value().c_str(),
-      vbmeta_path.value().c_str());
+      signing_helper_test_path.c_str(),
+      vbmeta_path.c_str());
 
   // Now check the value in test file.
   std::string value;
-  ASSERT_TRUE(base::ReadFileToString(signing_helper_test_path, &value));
+  ASSERT_TRUE(android::base::ReadFileToString(signing_helper_test_path.string(),
+                                              &value));
   EXPECT_EQ("DONE", value);
 }
 
 TEST_F(AvbToolTest, SigningHelperReturnError) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
   EXPECT_COMMAND(
       1,
-      "./avbtool make_vbmeta_image "
+      "./avbtool.py make_vbmeta_image "
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper test/avbtool_signing_helper_test.py "
       "--internal_release_string \"\"",
-      vbmeta_path.value().c_str());
+      vbmeta_path.c_str());
 }
 
 TEST_F(AvbToolTest, SigningHelperWithFilesReturnError) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
   EXPECT_COMMAND(
       1,
-      "./avbtool make_vbmeta_image "
+      "./avbtool.py make_vbmeta_image "
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper_with_files "
       "test/avbtool_signing_helper_with_files_test.py "
       "--internal_release_string \"\"",
-      vbmeta_path.value().c_str());
+      vbmeta_path.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageNoSignature) {
   GenerateVBMetaImage("vbmeta.img",
                       "",  // NONE
                       0,
-                      base::FilePath());
+                      "");
 
   EXPECT_COMMAND(0,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageValidSignature) {
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"));
+  GenerateVBMetaImage(
+      "vbmeta.img", "SHA256_RSA2048", 0, "test/data/testkey_rsa2048.pem");
 
   EXPECT_COMMAND(0,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageCorruptedVBMeta) {
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"));
+  GenerateVBMetaImage(
+      "vbmeta.img", "SHA256_RSA2048", 0, "test/data/testkey_rsa2048.pem");
 
   // Corrupt four bytes of data in the end of the image. Since the aux
   // data is at the end and this data is signed, this will change the
@@ -2014,90 +2790,88 @@ TEST_F(AvbToolTest, VerifyImageCorruptedVBMeta) {
                                                corrupt_data));
 
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageOtherKeyMatching) {
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"));
+  GenerateVBMetaImage(
+      "vbmeta.img", "SHA256_RSA2048", 0, "test/data/testkey_rsa2048.pem");
 
   EXPECT_COMMAND(0,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s --key test/data/testkey_rsa2048.pem",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageOtherKeyNotMatching) {
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"));
+  GenerateVBMetaImage(
+      "vbmeta.img", "SHA256_RSA2048", 0, "test/data/testkey_rsa2048.pem");
 
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s --key test/data/testkey_rsa4096.pem",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageBrokenSignature) {
-  base::FilePath vbmeta_path = testdir_.Append("vbmeta.bin");
-  base::FilePath signing_helper_test_path =
-      testdir_.Append("signing_helper_test");
+  std::filesystem::path vbmeta_path = testdir_ / "vbmeta.bin";
+  std::filesystem::path signing_helper_test_path =
+      testdir_ / "signing_helper_test";
 
   // Intentionally make the signer generate a wrong signature.
   EXPECT_COMMAND(
       0,
-      "SIGNING_HELPER_GENERATE_WRONG_SIGNATURE=1 ./avbtool make_vbmeta_image "
+      "SIGNING_HELPER_GENERATE_WRONG_SIGNATURE=1 ./avbtool.py "
+      "make_vbmeta_image "
       "--output %s "
       "--algorithm SHA256_RSA2048 --key test/data/testkey_rsa2048.pem "
       "--signing_helper test/avbtool_signing_helper_test.py "
       "--internal_release_string \"\"",
-      vbmeta_path.value().c_str());
+      vbmeta_path.c_str());
 
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_path.value().c_str());
+                 vbmeta_path.c_str());
 }
 
 // Helper to generate boot.img, unsparse system.img, and vbmeta.img.
 void AvbToolTest::GenerateImageWithHashAndHashtreeSetup() {
   const size_t boot_partition_size = 16 * 1024 * 1024;
   const size_t boot_image_size = 5 * 1024 * 1024;
-  base::FilePath boot_path = GenerateImage("boot.img", boot_image_size);
+  std::string boot_path = GenerateImage("boot.img", boot_image_size);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hash_footer"
+                 "./avbtool.py add_hash_footer"
                  " --image %s"
                  " --rollback_index 0"
                  " --partition_name boot"
                  " --partition_size %zd"
                  " --salt deadbeef"
                  " --internal_release_string \"\"",
-                 boot_path.value().c_str(),
+                 boot_path.c_str(),
                  boot_partition_size);
 
   const size_t system_partition_size = 10 * 1024 * 1024;
   const size_t system_image_size = 8 * 1024 * 1024;
-  base::FilePath system_path = GenerateImage("system.img", system_image_size);
+  std::string system_path = GenerateImage("system.img", system_image_size);
   EXPECT_COMMAND(0,
-                 "./avbtool add_hashtree_footer --salt d00df00d --image %s "
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
                  "--partition_size %zd --partition_name system "
                  "--internal_release_string \"\" ",
-                 system_path.value().c_str(),
+                 system_path.c_str(),
                  system_partition_size);
 
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
-                      base::StringPrintf("--include_descriptors_from_image %s "
-                                         "--include_descriptors_from_image %s",
-                                         boot_path.value().c_str(),
-                                         system_path.value().c_str()));
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--include_descriptors_from_image %s "
+                                  "--include_descriptors_from_image %s",
+                                  boot_path.c_str(),
+                                  system_path.c_str()));
 }
 
 TEST_F(AvbToolTest, VerifyImageWithHashAndHashtree) {
@@ -2107,20 +2881,85 @@ TEST_F(AvbToolTest, VerifyImageWithHashAndHashtree) {
   // is sparse.
   for (int n = 0; n < 2; n++) {
     EXPECT_COMMAND(0,
-                   "./avbtool verify_image "
+                   "./avbtool.py verify_image "
                    "--image %s ",
-                   vbmeta_image_path_.value().c_str());
+                   vbmeta_image_path_.c_str());
     if (n == 0) {
       EXPECT_COMMAND(0,
                      "img2simg %s %s.sparse",
-                     testdir_.Append("system.img").value().c_str(),
-                     testdir_.Append("system.img").value().c_str());
+                     (testdir_ / "system.img").c_str(),
+                     (testdir_ / "system.img").c_str());
       EXPECT_COMMAND(0,
                      "mv %s.sparse %s",
-                     testdir_.Append("system.img").value().c_str(),
-                     testdir_.Append("system.img").value().c_str());
+                     (testdir_ / "system.img").c_str(),
+                     (testdir_ / "system.img").c_str());
     }
   }
+}
+
+TEST_F(AvbToolTest, VerifyImageWithHashAndZeroedHashtree) {
+  const size_t system_partition_size = 10 * 1024 * 1024;
+  const size_t system_image_size = 8 * 1024 * 1024;
+  std::string system_path = GenerateImage("system.img", system_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %zd --partition_name system "
+                 "--internal_release_string \"\" ",
+                 system_path.c_str(),
+                 system_partition_size);
+
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--include_descriptors_from_image %s ",
+                                  system_path.c_str()));
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py verify_image --image %s --accept_zeroed_hashtree",
+      vbmeta_image_path_.c_str());
+
+  EXPECT_COMMAND(
+      0, "./avbtool.py zero_hashtree --image %s", system_path.c_str());
+
+  EXPECT_COMMAND(
+      1, "./avbtool.py verify_image --image %s", vbmeta_image_path_.c_str());
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py verify_image --image %s --accept_zeroed_hashtree",
+      vbmeta_image_path_.c_str());
+}
+
+TEST_F(AvbToolTest, VerifyImageWithNoHashtree) {
+  const size_t system_partition_size = 10 * 1024 * 1024;
+  const size_t system_image_size = 8 * 1024 * 1024;
+  std::string system_path = GenerateImage("system.img", system_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %zd --partition_name system "
+                 "--no_hashtree "
+                 "--internal_release_string \"\" ",
+                 system_path.c_str(),
+                 system_partition_size);
+
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--include_descriptors_from_image %s ",
+                                  system_path.c_str()));
+
+  EXPECT_COMMAND(
+      1, "./avbtool.py verify_image --image %s", vbmeta_image_path_.c_str());
+
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py verify_image --image %s --accept_zeroed_hashtree",
+      vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageWithHashAndHashtreeCorruptHash) {
@@ -2136,9 +2975,9 @@ TEST_F(AvbToolTest, VerifyImageWithHashAndHashtreeCorruptHash) {
                                                corrupt_data));
 
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 }
 
 TEST_F(AvbToolTest, VerifyImageWithHashAndHashtreeCorruptHashtree) {
@@ -2157,81 +2996,314 @@ TEST_F(AvbToolTest, VerifyImageWithHashAndHashtreeCorruptHashtree) {
   // is sparse.
   for (int n = 0; n < 2; n++) {
     EXPECT_COMMAND(1,
-                   "./avbtool verify_image "
+                   "./avbtool.py verify_image "
                    "--image %s ",
-                   vbmeta_image_path_.value().c_str());
+                   vbmeta_image_path_.c_str());
     if (n == 0) {
       EXPECT_COMMAND(0,
                      "img2simg %s %s.sparse",
-                     testdir_.Append("system.img").value().c_str(),
-                     testdir_.Append("system.img").value().c_str());
+                     (testdir_ / "system.img").c_str(),
+                     (testdir_ / "system.img").c_str());
       EXPECT_COMMAND(0,
                      "mv %s.sparse %s",
-                     testdir_.Append("system.img").value().c_str(),
-                     testdir_.Append("system.img").value().c_str());
+                     (testdir_ / "system.img").c_str(),
+                     (testdir_ / "system.img").c_str());
     }
   }
 }
 
 TEST_F(AvbToolTest, VerifyImageChainPartition) {
-  base::FilePath pk4096_path = testdir_.Append("testkey_rsa4096.avbpubkey");
+  std::filesystem::path pk4096_path = testdir_ / "testkey_rsa4096.avbpubkey";
   EXPECT_COMMAND(
       0,
-      "./avbtool extract_public_key --key test/data/testkey_rsa4096.pem"
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa4096.pem"
       " --output %s",
-      pk4096_path.value().c_str());
+      pk4096_path.c_str());
 
-  base::FilePath pk8192_path = testdir_.Append("testkey_rsa8192.avbpubkey");
+  std::filesystem::path pk8192_path = testdir_ / "testkey_rsa8192.avbpubkey";
   EXPECT_COMMAND(
       0,
-      "./avbtool extract_public_key --key test/data/testkey_rsa8192.pem"
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa8192.pem"
       " --output %s",
-      pk8192_path.value().c_str());
+      pk8192_path.c_str());
 
-  GenerateVBMetaImage("vbmeta.img",
-                      "SHA256_RSA2048",
-                      0,
-                      base::FilePath("test/data/testkey_rsa2048.pem"),
-                      base::StringPrintf("--chain_partition system:1:%s ",
-                                         pk4096_path.value().c_str()));
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--chain_partition system:1:%s ",
+                                  pk4096_path.c_str()));
 
   // Should not fail (name, rollback_index, contents all correct).
   EXPECT_COMMAND(0,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s "
                  "--expected_chain_partition system:1:%s",
-                 vbmeta_image_path_.value().c_str(),
-                 pk4096_path.value().c_str());
+                 vbmeta_image_path_.c_str(),
+                 pk4096_path.c_str());
 
   // Should fail because we didn't use --expected_chain_partition.
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s ",
-                 vbmeta_image_path_.value().c_str());
+                 vbmeta_image_path_.c_str());
 
   // Should fail because partition name is wrong.
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s "
                  "--expected_chain_partition xyz:1:%s",
-                 vbmeta_image_path_.value().c_str(),
-                 pk4096_path.value().c_str());
+                 vbmeta_image_path_.c_str(),
+                 pk4096_path.c_str());
 
   // Should fail because rollback index location is wrong.
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s "
                  "--expected_chain_partition system:2:%s",
-                 vbmeta_image_path_.value().c_str(),
-                 pk4096_path.value().c_str());
+                 vbmeta_image_path_.c_str(),
+                 pk4096_path.c_str());
 
   // Should fail because public key blob is wrong.
   EXPECT_COMMAND(1,
-                 "./avbtool verify_image "
+                 "./avbtool.py verify_image "
                  "--image %s "
                  "--expected_chain_partition system:1:%s",
-                 vbmeta_image_path_.value().c_str(),
-                 pk8192_path.value().c_str());
+                 vbmeta_image_path_.c_str(),
+                 pk8192_path.c_str());
+}
+
+TEST_F(AvbToolTest, VerifyImageChainPartitionWithFollow) {
+  std::filesystem::path pk4096_path = testdir_ / "testkey_rsa4096.avbpubkey";
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa4096.pem"
+      " --output %s",
+      pk4096_path.c_str());
+
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--chain_partition system:1:%s ",
+                                  pk4096_path.c_str()));
+
+  const size_t system_partition_size = 10 * 1024 * 1024;
+  const size_t system_image_size = 8 * 1024 * 1024;
+  std::string system_path = GenerateImage("system.img", system_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %zd --partition_name system "
+                 "--algorithm SHA256_RSA4096 "
+                 "--key test/data/testkey_rsa4096.pem "
+                 "--internal_release_string \"\" ",
+                 system_path.c_str(),
+                 system_partition_size);
+
+  // Even without --expected_chain_partition this shouldn't fail because we use
+  // --follow_chain_partitions and system.img exists... to avoid unstable paths
+  // (e.g. /tmp/libavb.12345) in the output we need to run this from the test
+  // directory itself. It's a little ugly but it works.
+  char cwdbuf[PATH_MAX];
+  ASSERT_NE(nullptr, getcwd(cwdbuf, sizeof cwdbuf));
+  EXPECT_COMMAND(0,
+                 "cd %s && (%s/avbtool.py verify_image "
+                 "--image vbmeta.img --follow_chain_partitions > out.txt)",
+                 testdir_.c_str(),
+                 cwdbuf);
+  std::filesystem::path out_path = testdir_ / "out.txt";
+  std::string out;
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(
+      "Verifying image vbmeta.img using embedded public key\n"
+      "vbmeta: Successfully verified SHA256_RSA2048 vbmeta struct in "
+      "vbmeta.img\n"
+      "system: Chained but ROLLBACK_SLOT (which is 1) and KEY (which has sha1 "
+      "2597c218aae470a130f61162feaae70afd97f011) not specified\n"
+      "--\n"
+      "Verifying image system.img using embedded public key\n"
+      "vbmeta: Successfully verified footer and SHA256_RSA4096 vbmeta struct "
+      "in system.img\n"
+      "system: Successfully verified sha1 hashtree of system.img for image of "
+      "8388608 bytes\n",
+      out);
+
+  // Make sure we also follow partitions *even* when specifying
+  // --expect_chain_partition. The output is slightly different from above.
+  EXPECT_COMMAND(0,
+                 "cd %s && (%s/avbtool.py verify_image "
+                 "--image vbmeta.img --expected_chain_partition system:1:%s "
+                 "--follow_chain_partitions > out.txt)",
+                 testdir_.c_str(),
+                 cwdbuf,
+                 pk4096_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(
+      "Verifying image vbmeta.img using embedded public key\n"
+      "vbmeta: Successfully verified SHA256_RSA2048 vbmeta struct in "
+      "vbmeta.img\n"
+      "system: Successfully verified chain partition descriptor matches "
+      "expected data\n"
+      "--\n"
+      "Verifying image system.img using embedded public key\n"
+      "vbmeta: Successfully verified footer and SHA256_RSA4096 vbmeta struct "
+      "in system.img\n"
+      "system: Successfully verified sha1 hashtree of system.img for image of "
+      "8388608 bytes\n",
+      out);
+}
+
+TEST_F(AvbToolTest, VerifyImageChainPartitionOtherVBMeta) {
+  std::filesystem::path pk4096_path = testdir_ / "testkey_rsa4096.avbpubkey";
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa4096.pem"
+      " --output %s",
+      pk4096_path.c_str());
+
+  const size_t system_partition_size = 10 * 1024 * 1024;
+  const size_t system_image_size = 8 * 1024 * 1024;
+  std::string system_path = GenerateImage("system.img", system_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %zd --partition_name system "
+                 "--internal_release_string \"\" "
+                 "--algorithm SHA256_RSA4096 "
+                 "--key test/data/testkey_rsa4096.pem ",
+                 system_path.c_str(),
+                 system_partition_size,
+                 pk4096_path.c_str());
+
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--chain_partition vbmeta_google:1:%s ",
+                                  pk4096_path.c_str()));
+
+  // Should not fail (name, rollback_index, contents all correct).
+  EXPECT_COMMAND(0,
+                 "./avbtool.py verify_image "
+                 "--image %s "
+                 "--expected_chain_partition vbmeta_google:1:%s",
+                 vbmeta_image_path_.c_str(),
+                 pk4096_path.c_str());
+
+  // Should not fail (looks in system.img image).
+  EXPECT_COMMAND(0,
+                 "./avbtool.py verify_image "
+                 "--image %s ",
+                 system_path.c_str());
+
+  // Extract the vbmeta blob from the footer in system.img, put it into
+  // vbmeta_google.img, and erase the footer from system.img (but keep
+  // the hash tree in system.img)
+  std::string vbmeta_google_path = GenerateImage("vbmeta_google.img", 0);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py extract_vbmeta_image"
+                 " --image %s"
+                 " --output %s",
+                 system_path.c_str(),
+                 vbmeta_google_path.c_str());
+  EXPECT_COMMAND(0,
+                 "./avbtool.py erase_footer"
+                 " --image %s --keep_hashtree",
+                 system_path.c_str());
+
+  // Should not fail - looks in system.img's detached vbmeta (vbmeta_google.img)
+  // for vbmeta blob and system.img for the actual hashtree.
+  EXPECT_COMMAND(0,
+                 "./avbtool.py verify_image "
+                 "--image %s ",
+                 vbmeta_google_path.c_str());
+}
+
+TEST_F(AvbToolTest, PrintPartitionDigests) {
+  std::filesystem::path pk4096_path = testdir_ / "testkey_rsa4096.avbpubkey";
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py extract_public_key --key test/data/testkey_rsa4096.pem"
+      " --output %s",
+      pk4096_path.c_str());
+
+  const size_t boot_partition_size = 16 * 1024 * 1024;
+  const size_t boot_image_size = 5 * 1024 * 1024;
+  std::string boot_path = GenerateImage("boot.img", boot_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hash_footer"
+                 " --image %s"
+                 " --rollback_index 0"
+                 " --partition_name boot"
+                 " --partition_size %zd"
+                 " --salt deadbeef"
+                 " --internal_release_string \"\"",
+                 boot_path.c_str(),
+                 boot_partition_size);
+
+  GenerateVBMetaImage(
+      "vbmeta.img",
+      "SHA256_RSA2048",
+      0,
+      "test/data/testkey_rsa2048.pem",
+      android::base::StringPrintf("--chain_partition system:1:%s "
+                                  "--include_descriptors_from_image %s",
+                                  pk4096_path.c_str(),
+                                  boot_path.c_str()));
+
+  const size_t system_partition_size = 10 * 1024 * 1024;
+  const size_t system_image_size = 8 * 1024 * 1024;
+  std::string system_path = GenerateImage("system.img", system_image_size);
+  EXPECT_COMMAND(0,
+                 "./avbtool.py add_hashtree_footer --salt d00df00d --image %s "
+                 "--partition_size %zd --partition_name system "
+                 "--algorithm SHA256_RSA4096 "
+                 "--key test/data/testkey_rsa4096.pem "
+                 "--internal_release_string \"\" ",
+                 system_path.c_str(),
+                 system_partition_size);
+
+  std::filesystem::path out_path = testdir_ / "out.txt";
+  std::string out;
+
+  // Normal output
+  EXPECT_COMMAND(0,
+                 "./avbtool.py print_partition_digests --image %s --output %s",
+                 vbmeta_image_path_.c_str(),
+                 out_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  EXPECT_EQ(
+      "system: d52d93c988d336a79abe1c05240ae9a79a9b7d61\n"
+      "boot: "
+      "184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\n",
+      out);
+
+  // JSON output
+  EXPECT_COMMAND(
+      0,
+      "./avbtool.py print_partition_digests --image %s --json --output %s",
+      vbmeta_image_path_.c_str(),
+      out_path.c_str());
+  ASSERT_TRUE(android::base::ReadFileToString(out_path.string(), &out));
+  // The trailing whitespace comes from python. If they fix that bug we need
+  // to update this test...
+  EXPECT_EQ(
+      "{\n"
+      "  \"partitions\": [\n"
+      "    {\n"
+      "      \"name\": \"system\",\n"
+      "      \"digest\": \"d52d93c988d336a79abe1c05240ae9a79a9b7d61\"\n"
+      "    },\n"
+      "    {\n"
+      "      \"name\": \"boot\",\n"
+      "      \"digest\": "
+      "\"184cb36243adb8b87d2d8c4802de32125fe294ec46753d732144ee65df68a23d\"\n"
+      "    }\n"
+      "  ]\n"
+      "}",
+      out);
 }
 
 class AvbToolTest_PrintRequiredVersion : public AvbToolTest {
@@ -2243,11 +3315,14 @@ class AvbToolTest_PrintRequiredVersion : public AvbToolTest {
     if (target_required_minor_version == 1) {
       // The --do_not_use_ab option will require 1.1.
       extra_args = "--do_not_use_ab";
+    } else if (target_required_minor_version == 2) {
+      extra_args = "--rollback_index_location 2";
     }
+
     const size_t boot_partition_size = 16 * 1024 * 1024;
-    base::FilePath output_path = testdir_.Append(kOutputFile);
+    std::filesystem::path output_path = testdir_ / kOutputFile;
     EXPECT_COMMAND(0,
-                   "./avbtool add_hash_footer"
+                   "./avbtool.py add_hash_footer"
                    " --rollback_index 0"
                    " --partition_name boot"
                    " --partition_size %zd"
@@ -2257,7 +3332,7 @@ class AvbToolTest_PrintRequiredVersion : public AvbToolTest {
                    " --print_required_libavb_version > %s",
                    boot_partition_size,
                    extra_args.c_str(),
-                   output_path.value().c_str());
+                   output_path.c_str());
     CheckVersion(target_required_minor_version);
   }
 
@@ -2265,19 +3340,21 @@ class AvbToolTest_PrintRequiredVersion : public AvbToolTest {
     std::string extra_args;
     if (target_required_minor_version == 1) {
       // The --do_not_use_ab option will require 1.1.
-      extra_args = "--do_not_use_ab";
+      extra_args = "--do_not_use_ab --check_at_most_once";
+    } else if (target_required_minor_version == 2) {
+      extra_args = "--rollback_index_location 2";
     }
     const size_t system_partition_size = 10 * 1024 * 1024;
-    base::FilePath output_path = testdir_.Append(kOutputFile);
+    std::filesystem::path output_path = testdir_ / kOutputFile;
     EXPECT_COMMAND(0,
-                   "./avbtool add_hashtree_footer --salt d00df00d "
+                   "./avbtool.py add_hashtree_footer --salt d00df00d "
                    "--partition_size %zd --partition_name system "
                    "--internal_release_string \"\""
                    " %s"
                    " --print_required_libavb_version > %s",
                    system_partition_size,
                    extra_args.c_str(),
-                   output_path.value().c_str());
+                   output_path.c_str());
     CheckVersion(target_required_minor_version);
   }
 
@@ -2286,39 +3363,43 @@ class AvbToolTest_PrintRequiredVersion : public AvbToolTest {
     if (target_required_minor_version == 1) {
       // An included descriptor that requires 1.1 will require 1.1 for vbmeta.
       const size_t boot_partition_size = 16 * 1024 * 1024;
-      base::FilePath image_path = GenerateImage("test_print_version", 1024);
+      std::string image_path = GenerateImage("test_print_version", 1024);
       EXPECT_COMMAND(0,
-                     "./avbtool add_hash_footer --salt d00df00d "
+                     "./avbtool.py add_hash_footer --salt d00df00d "
                      "--hash_algorithm sha256 --image %s "
                      "--partition_size %d --partition_name foobar "
                      "--algorithm SHA256_RSA2048 "
                      "--key test/data/testkey_rsa2048.pem "
                      "--internal_release_string \"\" "
                      "--do_not_use_ab",
-                     image_path.value().c_str(),
+                     image_path.c_str(),
                      (int)boot_partition_size);
-      extra_args = base::StringPrintf("--include_descriptors_from_image %s",
-                                      image_path.value().c_str());
+      extra_args = android::base::StringPrintf(
+          "--include_descriptors_from_image %s", image_path.c_str());
+    } else if (target_required_minor_version == 2) {
+      extra_args = "--rollback_index_location 2";
     }
-    base::FilePath output_path = testdir_.Append(kOutputFile);
+
+    std::filesystem::path output_path = testdir_ / kOutputFile;
     EXPECT_COMMAND(0,
-                   "./avbtool make_vbmeta_image "
+                   "./avbtool.py make_vbmeta_image "
                    "--algorithm SHA256_RSA2048 "
                    "--key test/data/testkey_rsa2048.pem "
                    "--internal_release_string \"\""
                    " %s"
                    " --print_required_libavb_version > %s",
                    extra_args.c_str(),
-                   output_path.value().c_str());
+                   output_path.c_str());
     CheckVersion(target_required_minor_version);
   }
 
   void CheckVersion(int expected_required_minor_version) {
-    base::FilePath output_path = testdir_.Append(kOutputFile);
+    std::filesystem::path output_path = testdir_ / kOutputFile;
     std::string output;
-    ASSERT_TRUE(base::ReadFileToString(output_path, &output));
-    EXPECT_EQ(output,
-              base::StringPrintf("1.%d\n", expected_required_minor_version));
+    ASSERT_TRUE(android::base::ReadFileToString(output_path.string(), &output));
+    EXPECT_EQ(
+        output,
+        android::base::StringPrintf("1.%d\n", expected_required_minor_version));
   }
 };
 
@@ -2330,12 +3411,20 @@ TEST_F(AvbToolTest_PrintRequiredVersion, HashFooter_1_1) {
   PrintWithAddHashFooter(1);
 }
 
+TEST_F(AvbToolTest_PrintRequiredVersion, HashFooter_1_2) {
+  PrintWithAddHashFooter(2);
+}
+
 TEST_F(AvbToolTest_PrintRequiredVersion, HashtreeFooter_1_0) {
   PrintWithAddHashtreeFooter(0);
 }
 
 TEST_F(AvbToolTest_PrintRequiredVersion, HashtreeFooter_1_1) {
   PrintWithAddHashtreeFooter(1);
+}
+
+TEST_F(AvbToolTest_PrintRequiredVersion, HashtreeFooter_1_2) {
+  PrintWithAddHashtreeFooter(2);
 }
 
 TEST_F(AvbToolTest_PrintRequiredVersion, Vbmeta_1_0) {
@@ -2346,90 +3435,139 @@ TEST_F(AvbToolTest_PrintRequiredVersion, Vbmeta_1_1) {
   PrintWithMakeVbmetaImage(1);
 }
 
-TEST_F(AvbToolTest, MakeAtxPikCertificate) {
-  base::FilePath subject_path = testdir_.Append("tmp_subject");
-  ASSERT_TRUE(base::WriteFile(subject_path, "fake PIK subject", 16));
-  base::FilePath pubkey_path = testdir_.Append("tmp_pubkey.pem");
+TEST_F(AvbToolTest_PrintRequiredVersion, Vbmeta_1_2) {
+  PrintWithMakeVbmetaImage(2);
+}
+
+TEST_F(AvbToolTest, MakeCertPikCertificate) {
+  std::filesystem::path subject_path = testdir_ / "tmp_subject";
+  ASSERT_TRUE(base::WriteFile(
+      base::FilePath(subject_path.c_str()), "fake PIK subject", 16));
+  std::filesystem::path pubkey_path = testdir_ / "tmp_pubkey.pem";
   EXPECT_COMMAND(
       0,
-      "openssl pkey -pubout -in test/data/testkey_atx_pik.pem -out %s",
-      pubkey_path.value().c_str());
+      "openssl pkey -pubout -in test/data/testkey_cert_pik.pem -out %s",
+      pubkey_path.c_str());
 
-  base::FilePath output_path = testdir_.Append("tmp_certificate.bin");
+  std::filesystem::path output_path = testdir_ / "tmp_certificate.bin";
   EXPECT_COMMAND(0,
-                 "./avbtool make_atx_certificate"
+                 "./avbtool.py make_certificate"
                  " --subject %s"
                  " --subject_key %s"
                  " --subject_key_version 42"
                  " --subject_is_intermediate_authority"
-                 " --authority_key test/data/testkey_atx_prk.pem"
+                 " --authority_key test/data/testkey_cert_prk.pem"
                  " --output %s",
-                 subject_path.value().c_str(),
-                 pubkey_path.value().c_str(),
-                 output_path.value().c_str());
+                 subject_path.c_str(),
+                 pubkey_path.c_str(),
+                 output_path.c_str());
 
-  EXPECT_COMMAND(0,
-                 "diff test/data/atx_pik_certificate.bin %s",
-                 output_path.value().c_str());
+  EXPECT_COMMAND(
+      0, "diff test/data/cert_pik_certificate.bin %s", output_path.c_str());
 }
 
-TEST_F(AvbToolTest, MakeAtxPskCertificate) {
-  base::FilePath pubkey_path = testdir_.Append("tmp_pubkey.pem");
+TEST_F(AvbToolTest, MakeCertPskCertificate) {
+  std::filesystem::path pubkey_path = testdir_ / "tmp_pubkey.pem";
   EXPECT_COMMAND(
       0,
-      "openssl pkey -pubout -in test/data/testkey_atx_psk.pem -out %s",
-      pubkey_path.value().c_str());
+      "openssl pkey -pubout -in test/data/testkey_cert_psk.pem -out %s",
+      pubkey_path.c_str());
 
-  base::FilePath output_path = testdir_.Append("tmp_certificate.bin");
+  std::filesystem::path output_path = testdir_ / "tmp_certificate.bin";
   EXPECT_COMMAND(0,
-                 "./avbtool make_atx_certificate"
-                 " --subject test/data/atx_product_id.bin"
+                 "./avbtool.py make_certificate"
+                 " --subject test/data/cert_product_id.bin"
                  " --subject_key %s"
                  " --subject_key_version 42"
-                 " --authority_key test/data/testkey_atx_pik.pem"
+                 " --authority_key test/data/testkey_cert_pik.pem"
                  " --output %s",
-                 pubkey_path.value().c_str(),
-                 output_path.value().c_str());
+                 pubkey_path.c_str(),
+                 output_path.c_str());
 
-  EXPECT_COMMAND(0,
-                 "diff test/data/atx_psk_certificate.bin %s",
-                 output_path.value().c_str());
+  EXPECT_COMMAND(
+      0, "diff test/data/cert_psk_certificate.bin %s", output_path.c_str());
 }
 
-TEST_F(AvbToolTest, MakeAtxPermanentAttributes) {
-  base::FilePath pubkey_path = testdir_.Append("tmp_pubkey.pem");
+TEST_F(AvbToolTest, MakeCertPukCertificate) {
+  std::filesystem::path pubkey_path = testdir_ / "tmp_pubkey.pem";
   EXPECT_COMMAND(
       0,
-      "openssl pkey -pubout -in test/data/testkey_atx_prk.pem -out %s",
-      pubkey_path.value().c_str());
+      "openssl pkey -pubout -in test/data/testkey_cert_puk.pem -out %s",
+      pubkey_path.c_str());
 
-  base::FilePath output_path = testdir_.Append("tmp_attributes.bin");
+  std::filesystem::path output_path = testdir_ / "tmp_certificate.bin";
+
+  // Test with both legacy manual unlock --usage as well as --usage_for_unlock.
+  std::string usage_args[] = {"--usage com.google.android.things.vboot.unlock",
+                              "--usage_for_unlock"};
+  for (const auto& usage : usage_args) {
+    EXPECT_COMMAND(0,
+                   "./avbtool.py make_certificate"
+                   " --subject test/data/cert_product_id.bin"
+                   " --subject_key %s"
+                   " --subject_key_version 42"
+                   " %s"
+                   " --authority_key test/data/testkey_cert_pik.pem"
+                   " --output %s",
+                   pubkey_path.c_str(),
+                   usage.c_str(),
+                   output_path.c_str());
+
+    EXPECT_COMMAND(
+        0, "diff test/data/cert_puk_certificate.bin %s", output_path.c_str());
+  }
+}
+
+TEST_F(AvbToolTest, MakeCertPermanentAttributes) {
+  std::filesystem::path pubkey_path = testdir_ / "tmp_pubkey.pem";
+  EXPECT_COMMAND(
+      0,
+      "openssl pkey -pubout -in test/data/testkey_cert_prk.pem -out %s",
+      pubkey_path.c_str());
+
+  std::filesystem::path output_path = testdir_ / "tmp_attributes.bin";
   EXPECT_COMMAND(0,
-                 "./avbtool make_atx_permanent_attributes"
+                 "./avbtool.py make_cert_permanent_attributes"
                  " --root_authority_key %s"
-                 " --product_id test/data/atx_product_id.bin"
+                 " --product_id test/data/cert_product_id.bin"
                  " --output %s",
-                 pubkey_path.value().c_str(),
-                 output_path.value().c_str());
+                 pubkey_path.c_str(),
+                 output_path.c_str());
 
   EXPECT_COMMAND(0,
-                 "diff test/data/atx_permanent_attributes.bin %s",
-                 output_path.value().c_str());
+                 "diff test/data/cert_permanent_attributes.bin %s",
+                 output_path.c_str());
 }
 
-TEST_F(AvbToolTest, MakeAtxMetadata) {
-  base::FilePath output_path = testdir_.Append("tmp_metadata.bin");
+TEST_F(AvbToolTest, MakeCertMetadata) {
+  std::filesystem::path output_path = testdir_ / "tmp_metadata.bin";
 
   EXPECT_COMMAND(
       0,
-      "./avbtool make_atx_metadata"
-      " --intermediate_key_certificate test/data/atx_pik_certificate.bin"
-      " --product_key_certificate test/data/atx_psk_certificate.bin"
+      "./avbtool.py make_cert_metadata"
+      " --intermediate_key_certificate test/data/cert_pik_certificate.bin"
+      " --product_key_certificate test/data/cert_psk_certificate.bin"
       " --output %s",
-      output_path.value().c_str());
+      output_path.c_str());
+
+  EXPECT_COMMAND(0, "diff test/data/cert_metadata.bin %s", output_path.c_str());
+}
+
+TEST_F(AvbToolTest, MakeCertUnlockCredential) {
+  std::filesystem::path output_path = testdir_ / "tmp_credential.bin";
 
   EXPECT_COMMAND(
-      0, "diff test/data/atx_metadata.bin %s", output_path.value().c_str());
+      0,
+      "./avbtool.py make_cert_unlock_credential"
+      " --intermediate_key_certificate test/data/cert_pik_certificate.bin"
+      " --unlock_key_certificate test/data/cert_puk_certificate.bin"
+      " --challenge test/data/cert_unlock_challenge.bin"
+      " --unlock_key test/data/testkey_cert_puk.pem"
+      " --output %s",
+      output_path.c_str());
+
+  EXPECT_COMMAND(
+      0, "diff test/data/cert_unlock_credential.bin %s", output_path.c_str());
 }
 
 }  // namespace avb

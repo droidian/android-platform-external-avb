@@ -58,6 +58,14 @@ char* avb_sub_cmdline(AvbOps* ops,
     char part_name[AVB_PART_NAME_MAX_SIZE];
     char guid_buf[37];
 
+    /* Don't attempt to query the partition guid unless its search string is
+     * present in the command line. Note: the original cmdline is used here,
+     * not the replaced one. See b/116010959.
+     */
+    if (avb_strstr(cmdline, replace_str[n]) == NULL) {
+      continue;
+    }
+
     if (!avb_str_concat(part_name,
                         sizeof part_name,
                         part_name_str[n],
@@ -89,7 +97,15 @@ char* avb_sub_cmdline(AvbOps* ops,
     }
   }
 
-  avb_assert(ret != NULL);
+  /* It's possible there is no _PARTUUID for replacement above.
+   * Duplicate cmdline to ret for additional substitutions below.
+   */
+  if (ret == NULL) {
+    ret = avb_strdup(cmdline);
+    if (ret == NULL) {
+      goto fail;
+    }
+  }
 
   /* Replace any additional substitutions. */
   if (additional_substitutions != NULL) {
@@ -150,30 +166,6 @@ static int cmdline_append_option(AvbSlotVerifyData* slot_data,
   return 1;
 }
 
-#define AVB_MAX_DIGITS_UINT64 32
-
-/* Writes |value| to |digits| in base 10 followed by a NUL byte.
- * Returns number of characters written excluding the NUL byte.
- */
-static size_t uint64_to_base10(uint64_t value,
-                               char digits[AVB_MAX_DIGITS_UINT64]) {
-  char rev_digits[AVB_MAX_DIGITS_UINT64];
-  size_t n, num_digits;
-
-  for (num_digits = 0; num_digits < AVB_MAX_DIGITS_UINT64 - 1;) {
-    rev_digits[num_digits++] = avb_div_by_10(&value) + '0';
-    if (value == 0) {
-      break;
-    }
-  }
-
-  for (n = 0; n < num_digits; n++) {
-    digits[n] = rev_digits[num_digits - 1 - n];
-  }
-  digits[n] = '\0';
-  return n;
-}
-
 static int cmdline_append_version(AvbSlotVerifyData* slot_data,
                                   const char* key,
                                   uint64_t major_version,
@@ -183,8 +175,8 @@ static int cmdline_append_version(AvbSlotVerifyData* slot_data,
   char combined[AVB_MAX_DIGITS_UINT64 * 2 + 1];
   size_t num_major_digits, num_minor_digits;
 
-  num_major_digits = uint64_to_base10(major_version, major_digits);
-  num_minor_digits = uint64_to_base10(minor_version, minor_digits);
+  num_major_digits = avb_uint64_to_base10(major_version, major_digits);
+  num_minor_digits = avb_uint64_to_base10(minor_version, minor_digits);
   avb_memcpy(combined, major_digits, num_major_digits);
   combined[num_major_digits] = '.';
   avb_memcpy(combined + num_major_digits + 1, minor_digits, num_minor_digits);
@@ -197,7 +189,7 @@ static int cmdline_append_uint64_base10(AvbSlotVerifyData* slot_data,
                                         const char* key,
                                         uint64_t value) {
   char digits[AVB_MAX_DIGITS_UINT64];
-  uint64_to_base10(value, digits);
+  avb_uint64_to_base10(value, digits);
   return cmdline_append_option(slot_data, key, digits);
 }
 
@@ -217,21 +209,27 @@ static int cmdline_append_hex(AvbSlotVerifyData* slot_data,
 
 AvbSlotVerifyResult avb_append_options(
     AvbOps* ops,
+    AvbSlotVerifyFlags flags,
     AvbSlotVerifyData* slot_data,
     AvbVBMetaImageHeader* toplevel_vbmeta,
     AvbAlgorithmType algorithm_type,
-    AvbHashtreeErrorMode hashtree_error_mode) {
+    AvbHashtreeErrorMode hashtree_error_mode,
+    AvbHashtreeErrorMode resolved_hashtree_error_mode) {
   AvbSlotVerifyResult ret;
   const char* verity_mode;
   bool is_device_unlocked;
   AvbIOResult io_ret;
 
-  /* Add androidboot.vbmeta.device option. */
-  if (!cmdline_append_option(slot_data,
-                             "androidboot.vbmeta.device",
-                             "PARTUUID=$(ANDROID_VBMETA_PARTUUID)")) {
-    ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
-    goto out;
+  /* Add androidboot.vbmeta.device option... except if not using a vbmeta
+   * partition since it doesn't make sense in that case.
+   */
+  if (!(flags & AVB_SLOT_VERIFY_FLAGS_NO_VBMETA_PARTITION)) {
+    if (!cmdline_append_option(slot_data,
+                               "androidboot.vbmeta.device",
+                               "PARTUUID=$(ANDROID_VBMETA_PARTUUID)")) {
+      ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
+      goto out;
+    }
   }
 
   /* Add androidboot.vbmeta.avb_version option. */
@@ -269,13 +267,11 @@ AvbSlotVerifyResult avb_append_options(
     case AVB_ALGORITHM_TYPE_SHA256_RSA2048:
     case AVB_ALGORITHM_TYPE_SHA256_RSA4096:
     case AVB_ALGORITHM_TYPE_SHA256_RSA8192: {
-      AvbSHA256Ctx ctx;
       size_t n, total_size = 0;
-      avb_sha256_init(&ctx);
+      uint8_t vbmeta_digest[AVB_SHA256_DIGEST_SIZE];
+      avb_slot_verify_data_calculate_vbmeta_digest(
+          slot_data, AVB_DIGEST_TYPE_SHA256, vbmeta_digest);
       for (n = 0; n < slot_data->num_vbmeta_images; n++) {
-        avb_sha256_update(&ctx,
-                          slot_data->vbmeta_images[n].vbmeta_data,
-                          slot_data->vbmeta_images[n].vbmeta_size);
         total_size += slot_data->vbmeta_images[n].vbmeta_size;
       }
       if (!cmdline_append_option(
@@ -284,7 +280,7 @@ AvbSlotVerifyResult avb_append_options(
               slot_data, "androidboot.vbmeta.size", total_size) ||
           !cmdline_append_hex(slot_data,
                               "androidboot.vbmeta.digest",
-                              avb_sha256_final(&ctx),
+                              vbmeta_digest,
                               AVB_SHA256_DIGEST_SIZE)) {
         ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
         goto out;
@@ -294,13 +290,11 @@ AvbSlotVerifyResult avb_append_options(
     case AVB_ALGORITHM_TYPE_SHA512_RSA2048:
     case AVB_ALGORITHM_TYPE_SHA512_RSA4096:
     case AVB_ALGORITHM_TYPE_SHA512_RSA8192: {
-      AvbSHA512Ctx ctx;
       size_t n, total_size = 0;
-      avb_sha512_init(&ctx);
+      uint8_t vbmeta_digest[AVB_SHA512_DIGEST_SIZE];
+      avb_slot_verify_data_calculate_vbmeta_digest(
+          slot_data, AVB_DIGEST_TYPE_SHA512, vbmeta_digest);
       for (n = 0; n < slot_data->num_vbmeta_images; n++) {
-        avb_sha512_update(&ctx,
-                          slot_data->vbmeta_images[n].vbmeta_data,
-                          slot_data->vbmeta_images[n].vbmeta_size);
         total_size += slot_data->vbmeta_images[n].vbmeta_size;
       }
       if (!cmdline_append_option(
@@ -309,7 +303,7 @@ AvbSlotVerifyResult avb_append_options(
               slot_data, "androidboot.vbmeta.size", total_size) ||
           !cmdline_append_hex(slot_data,
                               "androidboot.vbmeta.digest",
-                              avb_sha512_final(&ctx),
+                              vbmeta_digest,
                               AVB_SHA512_DIGEST_SIZE)) {
         ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
         goto out;
@@ -327,7 +321,7 @@ AvbSlotVerifyResult avb_append_options(
     const char* dm_verity_mode;
     char* new_ret;
 
-    switch (hashtree_error_mode) {
+    switch (resolved_hashtree_error_mode) {
       case AVB_HASHTREE_ERROR_MODE_RESTART_AND_INVALIDATE:
         if (!cmdline_append_option(
                 slot_data, "androidboot.vbmeta.invalidate_on_error", "yes")) {
@@ -354,6 +348,15 @@ AvbSlotVerifyResult avb_append_options(
         verity_mode = "logging";
         dm_verity_mode = "ignore_corruption";
         break;
+      case AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO:
+        // Should never get here because MANAGED_RESTART_AND_EIO is
+        // remapped by avb_manage_hashtree_error_mode().
+        avb_assert_not_reached();
+        break;
+      case AVB_HASHTREE_ERROR_MODE_PANIC:
+        verity_mode = "panicking";
+        dm_verity_mode = "panic_on_corruption";
+        break;
     }
     new_ret = avb_replace(
         slot_data->cmdline, "$(ANDROID_VERITY_MODE)", dm_verity_mode);
@@ -368,6 +371,13 @@ AvbSlotVerifyResult avb_append_options(
           slot_data, "androidboot.veritymode", verity_mode)) {
     ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
     goto out;
+  }
+  if (hashtree_error_mode == AVB_HASHTREE_ERROR_MODE_MANAGED_RESTART_AND_EIO) {
+    if (!cmdline_append_option(
+            slot_data, "androidboot.veritymode.managed", "yes")) {
+      ret = AVB_SLOT_VERIFY_RESULT_ERROR_OOM;
+      goto out;
+    }
   }
 
   ret = AVB_SLOT_VERIFY_RESULT_OK;
