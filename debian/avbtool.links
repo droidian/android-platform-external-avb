@@ -1,1 +1,1 @@
-/usr/lib/avbtool/avbtool /usr/bin/avbtool
+/usr/lib/avbtool/avbtool.py /usr/bin/avbtool
