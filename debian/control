@@ -2,7 +2,7 @@ Source: android-platform-external-avb
 Section: devel
 Priority: optional
 Maintainer: Eugenio Paolantonio (g7) <eugenio@droidian.org>
-Build-Depends: debhelper (>=13~),
+Build-Depends: debhelper-compat (= 13),
                dh-python,
                python3-all-dev,
 Standards-Version: 4.2.1
